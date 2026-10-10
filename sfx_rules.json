@@ -1,0 +1,29 @@
+{
+  "_help": "Categories = folder names in sfx_library (or your own SFX folder, which takes priority). Keywords are lowercase words/phrases in the narration. Edit freely.",
+  "transitions": {"whip": "swoosh", "slide": "swipe", "zoom": "whoosh", "dip_black": "impact", "crossfade": ""},
+  "overlays": {"hook": "bass_drop", "title": "hit_cinematic", "chapter": "impact", "label": "typing", "lower_third": "swipe"},
+  "pre_roll": ["riser", "reverse_whoosh"],
+  "max_seconds": {"typing": 1.6, "typewriter": 2.8, "tension": 4, "rumble": 3.5, "clock": 2.5, "engine_rev": 2.8},
+  "gain_db": {"typing": 3, "key_click": 2, "mouse_click": 3, "clock": 3, "camera": 2, "rumble": -2, "tension": -4, "bass_drop": -2, "engine_rev": -3},
+  "keywords": {
+    "typing":     ["typed", "typing", "wrote", "email", "text message", "message", "hacker", "hacked", "code", "computer", "search", "googled", "report"],
+    "typewriter": ["telegram", "typewriter", "letter", "memo", "document", "classified", "dispatch"],
+    "camera":     ["photo", "photograph", "photographed", "camera", "picture", "snapshot", "selfie"],
+    "cash":       ["money", "dollars", "million", "billion", "profit", "paid", "price", "cost", "rich", "salary"],
+    "ding":       ["notification", "idea", "realized", "discovered", "answer", "the truth", "solution"],
+    "pop":        ["fun fact", "tip", "bonus", "quick", "trick"],
+    "clock":      ["deadline", "countdown", "hours later", "minutes later", "midnight", "clock", "running out of time"],
+    "heartbeat":  ["fear", "afraid", "heartbeat", "panic", "terrified", "nervous", "anxiety"],
+    "glitch":     ["glitch", "error", "virus", "system", "malfunction", "crashed"],
+    "error":      ["wrong", "mistake", "failed", "rejected", "denied"],
+    "boom":       ["explosion", "exploded", "explode", "bomb", "blast", "detonated", "collapsed"],
+    "impact":     ["suddenly", "but then", "shocking", "everything changed", "never again", "until one day"],
+    "riser":      ["and then", "what happened next", "here's the thing", "but here's", "the real reason"],
+    "tension":    ["secret", "mystery", "nobody knew", "hidden", "disappeared", "vanished"],
+    "page_turn":  ["book", "page", "records", "archive", "history books", "diary"],
+    "sparkle":    ["magic", "beautiful", "perfect", "shine", "gold"],
+    "engine_rev": ["engine", "horsepower", "accelerate", "accelerated", "turbo", "v8", "rev"],
+    "mouse_click":["click", "clicked", "button"],
+    "punch":      ["hit", "punched", "strike", "knocked"]
+  }
+}

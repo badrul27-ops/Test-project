@@ -1,0 +1,4 @@
+scene_id,asset_filename,script_excerpt,phrase_occurrence,timing_mode,start_seconds,end_seconds,motion_mode,fit_mode,transition_type,transition_seconds,sfx_filename,sfx_anchor_text,sfx_offset_seconds,sfx_gain_db,locked
+S003,003.png,She opened the letter and froze.,1,follow_narration,,,zoom_in,fill,cut,,paper.wav,opened,0,-18,primary_visual;timing
+S004,,,,follow_narration,,,none,,dissolve,0.5,none,,,,
+S010,010.png,,,absolute,62.5,68,inherit,fit,,,,,,,

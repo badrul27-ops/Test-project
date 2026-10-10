@@ -1,0 +1,52 @@
+{
+ "schema_version": 1,
+ "project_guidelines": {},
+ "scenes": [
+  {
+   "scene_id": "S003",
+   "instruction_text": "Use 003.png when the narrator says “She opened the letter.” Hold it until “She knew what to do next.” Slowly zoom in. Play paper.wav at “opened,” quietly below the narration. Add no B-roll. Cut to the next scene. Lock the visual and timing.",
+   "notes": "Keep the letter readable.",
+   "timing_mode": "follow_narration",
+   "narration_anchor": {"text": "She opened the letter", "occurrence": 1},
+   "end_anchor": {"text": "She knew what to do next", "occurrence": 1},
+   "primary_visual": {"asset_filename": "003.png"},
+   "motion": {"mode": "explicit", "type": "zoom_in", "strength": "subtle", "ease": "smooth", "focus": [0.5, 0.4]},
+   "framing": {"mode": "explicit", "fit": "crop", "focus": [0.5, 0.4]},
+   "b_roll_mode": "none",
+   "b_roll": [],
+   "sfx_mode": "explicit",
+   "sfx": [
+    {"asset_filename": "paper.wav", "anchor": {"text": "opened", "occurrence_in_scene": 1},
+     "start_seconds": null, "offset_seconds": 0, "gain_db": -18, "fade_in": 0, "fade_out": 0.1,
+     "trim_in": 0, "duration": null, "pan": 0}
+   ],
+   "effects_mode": "none",
+   "effects": [],
+   "transition_out": {"mode": "explicit", "type": "cut", "duration_seconds": 0},
+   "captions": {"mode": "inherit"},
+   "locked": false,
+   "locked_fields": ["primary_visual", "timing"]
+  },
+  {
+   "scene_id": "S007",
+   "instruction_text": "",
+   "timing_mode": "follow_narration",
+   "b_roll_mode": "explicit",
+   "b_roll": [
+    {"asset_filename": "006.mp4", "mode": "insert", "anchor": {"text": "airport", "occurrence": null},
+     "end_anchor": null, "start_seconds": null, "end_seconds": null, "duration_seconds": 2.5,
+     "clip_in": 1.0, "clip_out": null, "size": 0.35, "position": "top_right", "audio_gain_db": null, "short": "freeze"}
+   ],
+   "sfx_mode": "inherit",
+   "sfx": [],
+   "effects_mode": "explicit",
+   "effects": [{"type": "vignette", "params": {"amount": 0.4}, "start_offset": 0, "end_offset": null}],
+   "motion": {"mode": "none"},
+   "framing": {"mode": "inherit"},
+   "transition_out": {"mode": "explicit", "type": "crossfade", "duration_seconds": 0.6},
+   "captions": {"mode": "explicit", "position": "Top"},
+   "locked": false,
+   "locked_fields": []
+  }
+ ]
+}

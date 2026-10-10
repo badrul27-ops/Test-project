@@ -1,0 +1,67 @@
+STRICT VISUAL EDITING INSTRUCTIONS
+
+Follow the scene plan below as the final authority.
+
+GENERAL RULES
+1. Use each image by its exact filename.
+9. Export only one video: 16:9, 1920 × 1080, 30 fps.
+10. Fill the canvas proportionally without stretching.
+
+SCENE 001
+Image: 001.png
+Script sentence: A man walks into the old station.
+Start: 00:00.000
+End: 00:04.200
+Duration: 4.200 seconds
+Framing: Fill / Crop
+Motion: Slow zoom in
+Focus: [Specify the subject or area]
+B-roll: None
+Sound effect: None
+Visual effect: None
+Transition to next scene: Cut
+Lock visual and timing: Yes
+
+SCENE 002
+Image: 002.png
+Script sentence: He buys a ticket at the counter.
+Start: 00:04.200
+End: 00:08.800
+Duration: 4.600 seconds
+Framing: Fill / Crop
+Motion: None
+B-roll: None
+Sound effect: paper.wav
+SFX start: 00:05.000
+SFX level: -14 dB
+Visual effect: None
+Transition to next scene: Cut
+Lock visual and timing: Yes
+
+SCENE 003
+Image: 004.png
+Script sentence: She opened the letter.
+Start: 00:08.800
+End: 00:13.500
+Duration: 4.700 seconds
+Framing: Fill / Crop
+Motion: Gentle pan
+Direction: Left to right
+B-roll: 006.mp4
+B-roll timeline start/end: 00:10.000 - 00:12.000
+B-roll source in/out: 00:01.000 - 00:03.000
+B-roll placement: Full-frame replacement
+B-roll source audio: Muted
+Sound effect: None
+Visual effect: Lens flare
+Transition to next scene: Crossfade 0.5 s
+Lock visual and timing: Yes
+
+SCENE 004
+Image: 005.png
+Script sentence: A man walks into the old station.
+Start: 00:13.500
+End: 00:24.430
+Framing: Fill / Crop
+Motion: Automatic
+Camera shake: strong

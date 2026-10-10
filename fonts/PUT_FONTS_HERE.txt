@@ -1,0 +1,7 @@
+Fonts in this folder appear in the app's font list automatically.
+
+Included (free licences, see the *-LICENSE / *-OFL files):
+  Roboto (Apache 2.0), Lato (SIL OFL), Source Sans Pro (SIL OFL)
+
+Add more: download any .ttf / .otf (e.g. Montserrat, Bebas Neue, Anton, Oswald from
+Google Fonts - all free) and drop it here, then restart AutoEditor.
