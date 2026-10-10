@@ -437,6 +437,14 @@ def main():
             amts = {s["motion_amount"] for s in imgs}
             assert len(amts) > 1 and all(s["motion"] not in ("none", "static", "subtle") for s in imgs), amts
         assert w4.project["scenes"][0]["motion"] == "none", "video clip was given image motion"
+    # locked scenes and motion from your own editing instructions are never re-chosen
+    s1, s2 = w4.project["scenes"][1], w4.project["scenes"][2]
+    s1.update(locked=True, motion="pan_left", motion_amount=0.2)
+    s2.update(motion="subtle", motion_amount=0.03, provenance={"motion": "instruction S002"})
+    for _ in range(5):
+        w4.apply_motion_level_all()
+    assert (s1["motion"], s1["motion_amount"]) == ("pan_left", 0.2), s1
+    assert (s2["motion"], s2["motion_amount"]) == ("subtle", 0.03), s2
     print("  volume/mute (preview only); lower panel toggle; scrollbar <-> zoom; "
           "categories set editable defaults + saved; motion levels None/Dynamic, clips untouched")
     print("GUI STATE OK")

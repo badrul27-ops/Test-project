@@ -94,6 +94,21 @@ def check_timestamps():
     spans, files = timestamp_spans(words, dur, media, snap=True, log=msgs.append)
     assert len(spans) == 5 and spans[0][0] == 0 and abs(spans[-1][1] - dur) < 1e-6
     assert all(spans[i][1] == spans[i + 1][0] for i in range(4))
+    # a cut snapped forward past the next timestamp, or duplicate timestamps: never a zero/negative scene
+    w2 = [{"w": "a", "s": 0, "e": 5.4}, {"w": "b", "s": 5.6, "e": 9.0}]
+    for media2, snap in ((["0-00.png", "0-05.png", "0-05.3.png"], True), (["0-00.png", "0-03.png", "0-03.png"], False)):
+        msgs = []
+        spans, files = timestamp_spans(w2, 10.0, media2, snap=snap, log=msgs.append)
+        assert all(b > a for a, b in spans) and len(files) == len(spans) == 2, spans
+        assert any("NOT used" in m for m in msgs), msgs
+    try:
+        timestamp_spans(w2, 10.0, ["1-05.png", "1-10.png"], log=lambda *_: None)
+        raise AssertionError("timestamps all after the end must be a clear error")
+    except ValueError:
+        pass
+    from autoedit.project import estimate_words
+    est = estimate_words("one two three.", 0.3)
+    assert all(0 <= x["s"] <= x["e"] <= 0.3 for x in est), est
     print("  timestamps ok")
 
 

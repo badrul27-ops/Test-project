@@ -180,17 +180,26 @@ def timestamp_spans(words, duration, media, snap=True, log=print):
         log(f"Warning: {len(over)} image timestamps are after the end of the voiceover ({duration:.1f}s) and are ignored.")
         keep = [i for i, t in enumerate(times) if t < duration]
         times, files = [times[i] for i in keep], [files[i] for i in keep]
+    if not times:
+        raise ValueError(f"All image timestamps are after the end of the voiceover ({duration:.1f}s) - "
+                         "check the file names (expected names like 0-00.png, 0-03.png, 1-15.png).")
     times[0] = 0.0
-    if snap and words:
-        gaps = [(words[i]["e"] + words[i + 1]["s"]) / 2 for i in range(len(words) - 1)]
-        snapped = [0.0]
-        for t in times[1:]:
-            near = min(gaps, key=lambda g: abs(g - t)) if gaps else t
-            nt = near if abs(near - t) <= 0.6 else t
-            if nt <= snapped[-1] + 0.2:
-                nt = t
-            snapped.append(round(nt, 3))
-        times = snapped
+    gaps = [(words[i]["e"] + words[i + 1]["s"]) / 2 for i in range(len(words) - 1)] if snap and words else []
+    kept_t, kept_f, dropped = [0.0], [files[0]], []
+    for t, f in zip(times[1:], files[1:]):
+        near = min(gaps, key=lambda g: abs(g - t)) if gaps else t
+        nt = near if abs(near - t) <= 0.6 else t
+        if nt <= kept_t[-1] + 0.2:
+            nt = t
+        if nt <= kept_t[-1] + 0.05:             # same time as (or before) the previous cut: no room on screen
+            dropped.append(os.path.basename(f))
+            continue
+        kept_t.append(round(nt, 3))
+        kept_f.append(f)
+    if dropped:
+        log(f"Warning: {len(dropped)} image(s) NOT used because their timestamp is the same as (or too close to) "
+            f"the previous image's: {', '.join(dropped[:5])}")
+    times, files = kept_t, kept_f
     spans = [(times[i], times[i + 1] if i + 1 < len(times) else duration) for i in range(len(times))]
     lens = sorted(b - a for a, b in spans)
     med = lens[len(lens) // 2] if lens else 0

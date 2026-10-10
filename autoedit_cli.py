@@ -11,6 +11,14 @@ from autoedit import project as prj
 from autoedit.render import export_package, render_all
 
 
+ASPECTS = ("16:9", "9:16", "1:1")
+
+
+def _abs(path):
+    """Saved projects are rendered from any folder, so every input path is stored absolute."""
+    return os.path.abspath(path) if path else path
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -28,7 +36,7 @@ def main():
                    default="smart")
     a.add_argument("--model", default="small")
     a.add_argument("--language", default="")
-    a.add_argument("--aspect", choices=["16:9", "9:16", "1:1"], default="16:9", help="ONE video in this shape")
+    a.add_argument("--aspect", choices=ASPECTS, default="16:9", help="ONE video in this shape")
     a.add_argument("--resolution", choices=["Draft", "HD", "Full HD", "1440", "4K-class"], default="Full HD")
     a.add_argument("--fps", type=int, choices=[24, 25, 30, 60], default=30)
     a.add_argument("--enc-quality", choices=["Draft", "Standard", "High"], default="Standard")
@@ -47,13 +55,16 @@ def main():
     if args.cmd == "analyze":
         p = prj.new_project()
         p.update(voiceover=os.path.abspath(args.voice), media_dir=os.path.abspath(args.media) if args.media else "",
-                 script=args.script, music=args.music, sfx_dir=args.sfx,
-                 output_dir=args.output_dir or os.path.dirname(os.path.abspath(args.voice)),
+                 script=_abs(args.script), music=_abs(args.music), sfx_dir=_abs(args.sfx),
+                 output_dir=_abs(args.output_dir) or os.path.dirname(os.path.abspath(args.voice)),
                  name=args.name or os.path.splitext(os.path.basename(args.voice))[0])
         batch = [f for f in args.batch_formats.split(",") if f]
         aspect = args.aspect
         if args.formats:
-            old = [f for f in args.formats.split(",") if f]
+            old = [f.strip() for f in args.formats.split(",") if f.strip()]
+            bad = [f for f in old if f not in ASPECTS]
+            if not old or bad:
+                ap.error(f"--formats must list shapes from {', '.join(ASPECTS)} (got {args.formats!r})")
             aspect, batch = old[0], old[1:]
         p["settings"].update(preset=args.preset, caption_style=args.captions, scene_mode=args.scene_mode,
                              whisper_model=args.model, language=args.language, aspect=aspect,

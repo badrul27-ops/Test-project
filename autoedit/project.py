@@ -134,8 +134,9 @@ def estimate_words(script, duration):
     if not toks or duration <= 0:
         return []
     weights = [len(t) + 2 + (6 if t.endswith((".", "!", "?")) else 0) for t in toks]
-    k = (duration - 0.4) / sum(weights)
-    out, t = [], 0.2
+    lead = min(0.2, duration / 10)              # small silence at both ends, never more than the clip allows
+    k = (duration - 2 * lead) / sum(weights)
+    out, t = [], lead
     for tok, wgt in zip(toks, weights):
         d = wgt * k
         out.append({"w": tok, "s": round(t, 3), "e": round(t + d * 0.85, 3)})

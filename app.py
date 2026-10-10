@@ -2133,14 +2133,22 @@ class MainWindow(QMainWindow):
             return
         st = p["settings"]
         preset = PRESETS.get(st.get("preset"), PRESETS["Documentary"])
-        apply_motion_level(p["scenes"], preset, st.get("motion_level", "Medium"),
-                           seed=int(time.time()) % 100000)
+        # locked scenes and motion set by your own editing instructions win over the automatic level
+        free = [s for s in p["scenes"] if not s.get("locked") and "motion" not in (s.get("locked_fields") or [])
+                and not str((s.get("provenance") or {}).get("motion", "")).startswith("instruction")]
+        apply_motion_level(free, preset, st.get("motion_level", "Medium"), seed=int(time.time()) % 100000)
+        if st.get("restrict_no_shake"):
+            for s in free:
+                if s.get("motion") == "subtle":
+                    s["motion"] = "zoom_in"
+        kept = len(p["scenes"]) - len(free)
         self.invalidate_preview()
         if self.commit(f"Motion level: {st.get('motion_level', 'Medium')}"):
             self.fill_table()
             self.props.reload()
-            self.status_msg(f"Automatic motion re-chosen for every still image ({st.get('motion_level')}). "
-                            "Ctrl+Z undoes it.")
+            self.status_msg(f"Automatic motion re-chosen for the still images ({st.get('motion_level')})"
+                            + (f"; {kept} locked or instructed scene(s) kept as they were" if kept else "")
+                            + ". Ctrl+Z undoes it.")
 
     def choose_category(self, name, apply_defaults=True):
         st = self.project["settings"]
