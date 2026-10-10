@@ -85,7 +85,8 @@ class Compositor:
         ov_src = None
         if atmosphere and ov and os.path.isfile(ov):
             nfr = self.total * fps
-            ov_src = (SeekVideoSource(ov, W, H, self.total, fps) if preview
+            ov_src = (SeekVideoSource(ov, W, H, self.total, fps, clip_duration=probe_duration(ov), short="loop")
+                      if preview
                       else VideoSource(ov, W, H, nfr / fps, fps, loop=True))
         look = {"vignette": self.preset.get("vignette", 0), "saturation": self.preset.get("saturation", 1)}
         self.fx = Atmosphere(W, H, fps, look,

@@ -362,33 +362,48 @@ class VideoSource:
         if clip_in:
             pre += ["-ss", f"{float(clip_in):.3f}"]
         avail = clip_duration
-        if clip_duration is not None:
+        if clip_out or clip_duration is not None:     # clip_out works even when the file length is unknown
             avail = max(0.05, (float(clip_out) if clip_out else clip_duration) - float(clip_in or 0))
         if clip_out:
             pre_t = ["-t", f"{avail:.3f}"]
         else:
             pre_t = []
+        self.pass_n = None                         # looping a trimmed part: frames per pass (see _read)
         if loop:
             pre = ["-stream_loop", "-1"] + pre
         elif avail and avail < seconds:
             if short == "loop" or (short == "auto" and avail < seconds * 0.7):
-                pre = ["-stream_loop", "-1"] + pre
-                pre_t = []
+                if clip_in or clip_out:
+                    # -stream_loop would repeat the WHOLE file; restart at clip_in instead, like the preview
+                    self.pass_n = max(1, int(round(avail * fps)))
+                else:
+                    pre = ["-stream_loop", "-1"] + pre
+                    pre_t = []
             elif short == "slow" or short == "auto":
                 vf.insert(0, f"setpts=PTS*{seconds / avail:.5f}")
             # "freeze": nothing - the reader holds the last frame
         vf.append(f"fps={fps}")
-        cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error"] + pre + pre_t + ["-i", path] + [
-            "-an", "-vf", ",".join(vf), "-frames:v", str(self.n), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        self.cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error"] + pre + pre_t + ["-i", path] + [
+            "-an", "-vf", ",".join(vf), "-frames:v", str(self.pass_n or self.n), "-f", "rawvideo", "-pix_fmt",
+            "rgb24", "-"]
         self.fsize = self.fw * self.fh * 3
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                     bufsize=self.fsize * 2, **popen_kwargs())
+        self.proc = None
+        self._spawn()
         self.idx = -1
         self.last = np.zeros((H, W, 3), np.uint8)
         self.cache_i, self.cache_f = None, None
 
+    def _spawn(self):
+        self.close()
+        self.proc = subprocess.Popen(self.cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     bufsize=self.fsize * 2, **popen_kwargs())
+        self.in_pass = 0
+
     def _read(self):
+        if self.pass_n and self.in_pass >= self.pass_n:
+            self._spawn()                         # next pass of the looped part
         buf = self.proc.stdout.read(self.fsize) if self.proc else b""
+        self.in_pass += 1
         if buf and len(buf) == self.fsize:
             fr = np.frombuffer(buf, np.uint8).reshape(self.fh, self.fw, 3)
             if self.mode != "crop":

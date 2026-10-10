@@ -802,10 +802,9 @@ class PropertiesPanel(QWidget):
         self.stack.setCurrentWidget(self.pages["text"])
 
     def _caption(self):
-        from .captions import caption_spans
+        from .captions import project_caption_spans
         p = self.get_project() or {}
-        spans = caption_spans(p.get("words") or [], p.get("settings", {}).get("caption_style",
-                                                                               "Modern (word highlight)"))
+        spans = project_caption_spans(p)
         return spans[self.idx] if 0 <= self.idx < len(spans) else None
 
     def _load_caption(self):

@@ -139,6 +139,16 @@ def _ease_out_back(x):
     return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2
 
 
+def _params(style, W, H, opts):
+    """Style parameters after the user's caption size - shared by the renderer and caption_spans."""
+    p = style_params(style, W, H)
+    scale = max(40, min(200, float((opts or {}).get("caption_size", 100) or 100))) / 100.0
+    p["size"] = max(10, int(p["size"] * scale))
+    if scale > 1.15:
+        p["max_chars"] = int(p["max_chars"] / (scale ** 0.7))
+    return p
+
+
 class CaptionRenderer:
     def __init__(self, words, style, W, H, opts=None):
         opts = opts or {}
@@ -147,11 +157,7 @@ class CaptionRenderer:
         self.hidden = []   # (start, end) ranges where captions are hidden (full-screen cards)
         if not self.enabled:
             return
-        self.p = style_params(style, W, H)
-        scale = max(40, min(200, float(opts.get("caption_size", 100) or 100))) / 100.0
-        self.p["size"] = max(10, int(self.p["size"] * scale))
-        if scale > 1.15:
-            self.p["max_chars"] = int(self.p["max_chars"] / (scale ** 0.7))
+        self.p = _params(style, W, H, opts)
         path = resolve_font(opts.get("caption_font"), self.p["fonts"])
         self.font = ImageFont.truetype(path, self.p["size"]) if path else ImageFont.load_default()
         self.text_col = hex_rgb(opts.get("caption_color", "#FFFFFF"), WHITE)
@@ -317,11 +323,11 @@ def blend_rgba(frame, rgbp, a, x0, y0):
 
 
 # ---------------------------------------------------------------------- caption track + editing
-def caption_spans(words, style="Modern (word highlight)", W=1920, H=1080):
+def caption_spans(words, style="Modern (word highlight)", W=1920, H=1080, opts=None):
     """Caption blocks as shown on screen: [{'start','end','text','i0','i1'}] (word index range)."""
     if not words or style == "None":
         return []
-    p = style_params(style, W, H)
+    p = _params(style, W, H, opts)
     chunks = make_chunks(words, p["max_words"], p["max_chars"])
     ids = {id(w): i for i, w in enumerate(words)}
     out = []
@@ -330,6 +336,14 @@ def caption_spans(words, style="Modern (word highlight)", W=1920, H=1080):
         out.append({"start": c["start"], "end": c["end"], "i0": i0, "i1": i1,
                     "text": " ".join(w["w"] for w in c["words"])})
     return out
+
+
+def project_caption_spans(project):
+    """caption_spans for a project: same video shape and caption size as the export."""
+    from .exportcfg import dims
+    st = project.get("settings") or {}
+    W, H = dims(st.get("aspect") or "16:9", st.get("resolution") or "Full HD")
+    return caption_spans(project.get("words") or [], st.get("caption_style", "Modern (word highlight)"), W, H, st)
 
 
 def edit_caption_words(words, i0, i1, new_text):

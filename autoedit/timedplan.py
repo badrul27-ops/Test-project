@@ -94,9 +94,11 @@ def _phrase(x):
     return x
 
 
-def _resolve_image(ref, media, index, n, problems, what="line"):
-    """Exact file for a reference, or None (with the reason in problems). Never guesses between files."""
+def _resolve_image(ref, media, index, n, problems, what="line", src_line=None):
+    """Exact file for a reference, or None (with the reason in problems). Never guesses between files.
+    n names the shot/scene in messages; src_line is the text line to jump to (default: n)."""
     where = f"{what} {n}"
+    ln = src_line or n
     base = os.path.basename(ref.replace("\\", "/")).lower()
     same = [m for m in media if os.path.basename(m).lower() == base] if "." in base else []
     if len(same) > 1:
@@ -104,7 +106,7 @@ def _resolve_image(ref, media, index, n, problems, what="line"):
         pick = [m for m in same if m.replace("\\", "/").lower().endswith("/" + want)] if "/" in want else []
         if len(pick) != 1:
             folders = ", ".join(sorted({os.path.basename(os.path.dirname(m)) for m in same}))
-            problems.append({"line": n, "level": "error",
+            problems.append({"line": ln, "level": "error",
                              "msg": f"{where}: {len(same)} files are named {os.path.basename(ref)} (in {folders}) - "
                                     f"write the folder too, e.g. {os.path.basename(os.path.dirname(same[-1]))}/"
                                     f"{os.path.basename(ref)}"})
@@ -112,20 +114,20 @@ def _resolve_image(ref, media, index, n, problems, what="line"):
         return pick[0]
     paths, bad = C.resolve(ref, media, index)
     if any("files have this number" in b_ for b_ in bad):
-        problems.append({"line": n, "level": "error",
+        problems.append({"line": ln, "level": "error",
                          "msg": f"{where}: " + next(b_ for b_ in bad if "files have this number" in b_)
                                 .split(" - used")[0] + " - write the file name instead"})
         return None
     if not paths:
-        problems.append({"line": n, "level": "error",
+        problems.append({"line": ln, "level": "error",
                          "msg": f"{where}: {ref} is missing - it isn't in the images folder. Select a replacement."})
         return None
     if len(paths) > 1:
-        problems.append({"line": n, "level": "error",
+        problems.append({"line": ln, "level": "error",
                          "msg": f"{where}: '{ref}' means {len(paths)} files - give one file name"})
         return None
     for b_ in bad:
-        problems.append({"line": n, "level": "warning", "msg": f"{where}: {b_}"})
+        problems.append({"line": ln, "level": "warning", "msg": f"{where}: {b_}"})
     return paths[0]
 
 
@@ -137,27 +139,41 @@ def _coverage(rows, duration, problems, what="line"):
     rows.sort(key=lambda r: r["start"])
     for x, y in zip(rows, rows[1:]):
         if y["start"] < x["end"] - 1e-6:
-            problems.append({"line": y["line"], "level": "error",
+            problems.append({"line": y.get("src_line") or y["line"], "level": "error",
                              "msg": f"{_lab(y)} starts at {_f(y['start'])} but {_lab(x)} runs until "
                                     f"{_f(x['end'])} - shots can't overlap"})
         elif y["start"] > x["end"] + 1e-6:
-            problems.append({"line": y["line"], "level": "error",
+            problems.append({"line": y.get("src_line") or y["line"], "level": "error",
                              "msg": f"nothing is assigned from {_f(x['end'])} to {_f(y['start'])} (between {_lab(x)} "
                                     f"and {_lab(y)})"})
     if rows and rows[0]["start"] > 1e-6:
-        problems.append({"line": rows[0]["line"], "level": "error",
+        problems.append({"line": rows[0].get("src_line") or rows[0]["line"], "level": "error",
                          "msg": f"nothing is assigned from 0:00 to {_f(rows[0]['start'])} - the first shot must start "
                                 "at 0:00"})
     if rows and duration:
         end = rows[-1]["end"]
         if end < duration - 0.5:
-            problems.append({"line": rows[-1]["line"], "level": "error",
+            problems.append({"line": rows[-1].get("src_line") or rows[-1]["line"], "level": "error",
                              "msg": f"the narration continues until {_f(duration)} but the plan ends at {_f(end)} - "
                                     "add shots for the rest"})
         elif end > duration + 0.5:
-            problems.append({"line": rows[-1]["line"], "level": "error",
+            problems.append({"line": rows[-1].get("src_line") or rows[-1]["line"], "level": "error",
                              "msg": f"the plan runs until {_f(end)} but the narration ends at {_f(duration)} - the "
                                     "narration is never extended; shorten the last shot"})
+
+
+def _strip_comment(line):
+    """Text after # is a comment - except inside quotes ('text "Top #1"') and image numbers ('image #3')."""
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote or (quote == "“" and ch == "”"):
+                quote = None
+        elif ch in "\"“":
+            quote = ch
+        elif ch == "#" and not line[i + 1:i + 2].isdigit():
+            return line[:i]
+    return line
 
 
 def parse_plan(text, media, duration=None, fps=30, words=None):
@@ -169,7 +185,7 @@ def parse_plan(text, media, duration=None, fps=30, words=None):
     index = C.media_index(media)
     rows, problems = [], []
     for n, raw in enumerate((text or "").splitlines(), 1):
-        line = raw.split("#", 1)[0].strip()
+        line = _strip_comment(raw).strip()
         if not line or line.startswith("//"):
             continue
         m = RANGE.match(line)
@@ -501,7 +517,7 @@ def parse_sheet(text, media, duration=None, fps=30, words=None):
         if _empty(img):
             problems.append({"line": ln, "level": "error", "msg": f"{lab}: no image given"})
             continue
-        path = _resolve_image(img.strip(), media, index, b["num"], problems, what="SCENE")
+        path = _resolve_image(img.strip(), media, index, b["num"], problems, what="SCENE", src_line=ln)
         a_ln, a_v = get("start")
         e_ln, e_v = get("end")
         a, e = parse_time(a_v) if not _empty(a_v) else None, parse_time(e_v) if not _empty(e_v) else None
@@ -653,7 +669,7 @@ def _sheet_settings(lab, f, a, e, problems):
     ln, v = val("broll")
     if v:
         mw = _mode_word(v)
-        if mw in ("none", "inherit"):
+        if mw in ("none", "inherit", "auto"):
             s["b_roll_mode"] = mw
             interp.append((f"B-roll: {v}", f"B-roll {mw}"))
         elif re.search(I.FILE_RE + "$", v, re.I):
@@ -671,6 +687,9 @@ def _sheet_settings(lab, f, a, e, problems):
             sl, sv = val("broll_source")
             if sv:
                 ci, co = _range(sv)
+                m_end = re.match(r"^\s*" + TIME + r"\s*(?:-|–|—|to|until)\s*(?:end|the end)\s*$", sv, re.I)
+                if ci is None and m_end:            # 'from 00:02.000 to the end of the clip'
+                    ci, co = parse_time(m_end.group(1)), None
                 if ci is None:
                     bad(sl, "B-roll source in/out", sv, " (use 00:02.000 - 00:04.000)")
                 else:
@@ -790,7 +809,8 @@ def _sheet_settings(lab, f, a, e, problems):
                 lv = v.lower()
                 d = re.search(TIME, lv)
                 typ = ("crossfade" if re.search(r"dissolve|cross", lv) else "dip_black" if "fade" in lv else
-                       "cut" if "cut" in lv else "slide" if "slide" in lv else "whip" if "whip" in lv else None)
+                       "cut" if "cut" in lv else "slide" if "slide" in lv else "whip" if "whip" in lv else
+                       "zoom" if re.search(r"\bzoom\b", lv) else None)
                 tr = {"mode": "explicit", "type": typ, "duration_seconds": parse_time(d.group(1)) if d and typ != "cut"
                       else (0.0 if typ == "cut" else None)} if typ else None
             if tr:
@@ -918,11 +938,12 @@ def export_sheet(project):
             out += [f"B-roll: {os.path.basename(b['media'])}", f"B-roll timeline start/end: {_tc(b['start'])} - "
                     f"{_tc(b['end'])}"]
             if b.get("clip_in") is not None or b.get("clip_out") is not None:
-                out.append(f"B-roll source in/out: {_tc(b.get('clip_in') or 0)} - {_tc(b.get('clip_out') or 0)}")
+                out.append(f"B-roll source in/out: {_tc(b.get('clip_in') or 0)} - "
+                           + (_tc(b["clip_out"]) if b.get("clip_out") is not None else "end"))
             out += [f"B-roll placement: {'Full-frame replacement' if b.get('mode') != 'overlay' else 'Overlay ' + b.get('position', 'top_right').replace('_', ' ')}",
                     f"B-roll source audio: {'Muted' if b.get('audio_gain_db') is None else str(b['audio_gain_db']) + ' dB'}"]
         else:
-            out.append("B-roll: " + ("None" if s.get("b_roll_mode") in ("none", "inherit", None) else "None"))
+            out.append("B-roll: " + {"auto": "Automatic", "inherit": "Inherit"}.get(s.get("b_roll_mode"), "None"))
         evs = [e for e in project.get("sfx_events") or [] if e.get("source") == sc.get("id")]
         if evs:
             e = evs[0]

@@ -240,8 +240,67 @@ def check_review_fixes():
     print("  review fixes (instructions, names, SFX level None) ok")
 
 
+def check_review_fixes_2():
+    """Regressions: looped clip range (export == preview), captions per shape, scene-sheet round trip."""
+    from autoedit import instructions as I
+    from autoedit import project as P
+    from autoedit import timedplan as T
+    from autoedit.captions import CaptionRenderer, project_caption_spans
+    from autoedit.stock import suggest_terms
+    from autoedit.util import run_ffmpeg
+    from autoedit.visuals import SeekVideoSource, VideoSource, probe_duration
+    tmp = tempfile.mkdtemp()
+    clip = os.path.join(tmp, "c.mp4")            # a different grey level every second
+    run_ffmpeg(["-f", "lavfi", "-i", "color=c=black:s=160x90:r=30:d=5", "-vf", "geq=lum='40+40*floor(T)':cb=128:cr=128",
+                "-pix_fmt", "yuv420p", "-c:v", "libx264", clip])
+    kw = dict(clip_duration=probe_duration(clip), clip_in=2.0, clip_out=3.0, short="loop")
+    v, s = VideoSource(clip, 160, 90, 4.0, 30, **kw), SeekVideoSource(clip, 160, 90, 4.0, 30, **kw)
+    for t in (0.5, 1.5, 2.5, 3.5):
+        a, b = v.frame_index(int(t * 30)).mean(), s.frame_index(int(t * 30)).mean()
+        assert abs(a - b) < 8 and abs(a - 121) < 8, (t, a, b)     # always the 2-3 s part (grey 120)
+    v.close()
+    s.close()
+    v = VideoSource(clip, 160, 90, 2.0, 30, clip_duration=None, clip_in=1.0, clip_out=2.0, short="freeze")
+    assert abs(v.frame_index(10).mean() - 81) < 8                  # length unknown + clip_out: no crash
+    v.close()
+    # caption blocks in the editor == on screen, for every shape and caption size
+    words, _ = fake_words(1)
+    for asp, size, (W, H) in (("9:16", 100, (1080, 1920)), ("16:9", 160, (1920, 1080))):
+        p = P.new_project()
+        p["words"] = words
+        p["settings"].update(aspect=asp, caption_size=size)
+        r = CaptionRenderer(words, p["settings"]["caption_style"], W, H, opts=p["settings"])
+        assert [(c["start"], c["end"]) for c in project_caption_spans(p)] == [(c["start"], c["end"]) for c in r.chunks]
+    # scene sheet: write it out and read it back without losing zoom / open-ended B-roll / inherit
+    for n in ("001.png", "002.png", "003.png"):
+        Image.new("RGB", (64, 36)).save(os.path.join(tmp, n))
+    p = P.new_project()
+    p.update(media_dir=tmp, duration=9.0, words=[{"w": f"w{i}", "s": i * 0.5, "e": i * 0.5 + 0.4} for i in range(18)])
+    p["scenes"] = [dict(id=f"T00{k + 1}", start=3.0 * k, end=3.0 * k + 3, media=os.path.join(tmp, f"00{k + 1}.png"),
+                        transition="cut", motion="zoom_in") for k in range(3)]
+    p["scenes"][0].update(transition="zoom", transition_s=0.5)
+    p["broll"] = [dict(media=clip, start=3.5, end=5.0, mode="insert", clip_in=2.0, clip_out=None, source="T002")]
+    I.record(p, "T003")["settings"]["b_roll_mode"] = "inherit"
+    rows, probs = T.parse_plan(T.export_sheet(p), P.project_media(p) + [clip], 9.0, 30, p["words"])
+    assert not [x for x in probs if "not understood" in x["msg"]], probs
+    by = {r["line"]: r["settings"] for r in rows}
+    assert by[1]["transition_out"]["type"] == "zoom" and by[1]["transition_out"]["duration_seconds"] == 0.5
+    assert [(b["clip_in"], b["clip_out"]) for b in by[2]["b_roll"]] == [(2.0, None)]
+    assert by[3]["b_roll_mode"] == "inherit"
+    # '#' starts a comment, except 'image #3' and inside quotes; sheet problems point at the real text line
+    assert T._strip_comment('0:00 - 0:04 | image #3 | text "Top #1"  # note') == '0:00 - 0:04 | image #3 | text "Top #1"  '
+    sheet = "GENERAL RULES\n\nSCENE 001\nImage: 001.png\nStart: 00:00.000\nEnd: 00:09.000\n\nSCENE 002\nImage: 099.png\n"
+    _, probs = T.parse_plan(sheet, P.project_media(p), 9.0, 30, None)
+    miss = [x for x in probs if "099.png" in x["msg"]]
+    assert miss and sheet.splitlines()[miss[0]["line"] - 1] == "Image: 099.png", miss
+    # stock ideas: a word starting a sentence isn't taken for a name
+    assert "storms" in suggest_terms("The war ended. Storms hit the coast")
+    print("  review fixes 2 (looped clip range, captions per shape, sheet round trip, comments) ok")
+
+
 if __name__ == "__main__":
     check_review_fixes()
+    check_review_fixes_2()
     check_scenes()
     check_script()
     check_visuals()

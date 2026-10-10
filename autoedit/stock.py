@@ -424,14 +424,17 @@ IDEAS = {
 def suggest_terms(text, category="", max_n=6):
     """Editable search ideas from a scene's narration. Skips names of people and prefers places,
     objects, weather and moods (safer than footage of identifiable people)."""
-    words = re.findall(r"[A-Za-z][A-Za-z'-]+", text or "")
+    found = list(re.finditer(r"[A-Za-z][A-Za-z'-]+", text or ""))
+    words = [m.group(0) for m in found]
     out = []
     lower = [w.lower().strip("'") for w in words]
     for w in lower:
         if w in CONCEPTS and CONCEPTS[w] not in out:
             out.append(CONCEPTS[w])
     # plain content words (not names, not people words)
-    names = {w for i, w in enumerate(words) if w[0].isupper() and i > 0 and words[i - 1][-1] not in ".!?"}
+    # a capital that doesn't start a sentence is probably a name
+    names = {m.group(0) for i, m in enumerate(found) if m.group(0)[0].isupper() and i > 0
+             and not (text[:m.start()].rstrip()[-1:] in ".!?:")}
     for w, lw in zip(words, lower):
         if len(out) >= max_n:
             break

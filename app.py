@@ -32,7 +32,7 @@ from autoedit.editorial import description_text
 from autoedit.engine import Compositor
 from autoedit.fx import ATMOSPHERES
 from autoedit.gui_panels import CaptionPanel, ColorButton, QualityPanel, SfxPanel, TextChaptersPanel, fmt_items
-from autoedit.captions import caption_spans
+from autoedit.captions import project_caption_spans
 from autoedit.gui_widgets import PlayerWidget, TimelineScrollBar, thumb
 from autoedit.media_bin import MEDIA_FILTER, MediaBin, loader
 from autoedit.project import project_media
@@ -1795,8 +1795,7 @@ class MainWindow(QMainWindow):
 
     def refresh_timeline(self):
         p = self.project
-        caps = caption_spans(p.get("words") or [], p["settings"].get("caption_style", "Modern (word highlight)")) \
-            if p["settings"].get("captions", True) else []
+        caps = project_caption_spans(p) if p["settings"].get("captions", True) else []
         self.timeline.set_project(p, self.peaks, caps)
 
     def edited(self, label_text, preview=False):
