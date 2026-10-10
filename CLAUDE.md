@@ -1,4 +1,4 @@
-# CLAUDE.md - AutoEditor (v7.3.0)
+# CLAUDE.md - AutoEditor (v7.3.1)
 
 Guide for Claude Code working in this repository. Read this first, then the code. The user-facing manual is
 `README.md`; this file is for the developer/agent.
@@ -65,6 +65,9 @@ ffprobe** dependency - `mediainfo.probe()` parses `ffmpeg -i` output.
 | test_instructions_gui | the Editing instructions window (F8) + guidelines |
 | test_timed_plan | timed edit plan: template, line errors, exact build, real export, window |
 | test_scene_sheet | SCENE-block sheet format, strict None defaults, GENERAL RULES export format, write-back |
+
+`tests.test_sfx` and `tools/make_sfx.py` also need `scipy` (not needed by the app itself). On a bare Linux
+box Qt needs system libraries such as `libegl1`, `libgl1`, `libxkbcommon0`, `libfontconfig1`.
 
 Tests build their own fixtures (tone "voices", noise/tinted images, ffmpeg lavfi clips) - no network, no
 Whisper. Use `AE_SHOTS=<dir>` to save GUI screenshots and **look at them** after UI changes.
@@ -213,7 +216,9 @@ V2, keyframes, undo) · v6.1-6.3 categories, motion levels, big preview, theater
 v6.5 cues/markers, Match images dialog · v6.6 directions box, no repeats · v7.0 smart planning, Script/
 Instructions/Review, framing modes, single-aspect export, verified exports, faster Standard encode ·
 v7.1 per-scene Editing instructions (F8), guidelines, JSON/CSV import · v7.2 required Timed edit plan (F9) ·
-v7.3 scene-sheet format, editable per-scene summaries, write-back, film-convention pans.
+v7.3 scene-sheet format, editable per-scene summaries, write-back, film-convention pans ·
+v7.3.1 bug-fix release from a code review (no new features; regression checks in test_core
+`check_review_fixes*` and test_gui_state `check_review_fixes`).
 
 ## 10. Typical user workflow (what to keep working)
 Start page: voiceover, images folder, script, video shape, category, mode "My timed edit plan" → Open the

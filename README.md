@@ -1,4 +1,4 @@
-# AutoEditor v7.3
+# AutoEditor v7.3.1
 
 Automatic video editor for Windows. Everything runs on your own PC, and there's no subscription or API cost.
 
@@ -20,6 +20,50 @@ The first time you press *Analyze*, the speech model downloads once. The "small"
 ## Upgrading from an older version
 
 Unzip v6 **over** your existing AutoEditor folder and replace the files when Windows asks. Keep the `venv` folder, so you don't need to run setup again. Then start it with `run.bat` as before.
+
+## New in v7.3.1: bug fixes
+
+No new features - this release fixes problems found while checking the code. Your projects open as before.
+
+**Exports**
+- A video clip that repeats to fill a long scene now repeats only the part you chose. Before, the export
+  could show footage you had cut out, even though the preview looked right.
+- Typing `:` `/` `?` or similar in the file name no longer makes the export fail at the very end
+  (those characters are replaced with `_`).
+- Exports no longer crash when the sound-effect level is *None* but a scene asks for a sound effect, or when a
+  video clip's length can't be read.
+- An export stopped by an error now cleans up after itself, and an interrupted sound mix is never reused.
+- The "Editor package" export now checks for missing files first, like the normal export.
+
+**Timeline**
+- Dragging, swapping or duplicating a picture now takes its clip range and framing (fit, focus point, trim)
+  with it. A locked scene stops the move and tells you why.
+- Splitting a video scene or B-roll clip: the second part continues the footage instead of replaying it, timed
+  effects stay where they were, and each half gets its own scene number.
+- After moving a B-roll or text clip past another one, the same clip stays selected.
+- The CC (captions) track updates when you change caption size, style or video shape, so clicking a caption
+  edits the right words. In 9:16 videos the caption editor now shows the same captions as the video.
+- "Apply motion level to all" no longer changes locked scenes or motion you set in Editing instructions, and
+  "Dynamic" never gives a scene near-still motion.
+- Overlay videos (dust, grain…) loop in the preview like in the export.
+
+**Plans and instructions**
+- Scene sheets you write back and load again keep Zoom transitions, open-ended B-roll and "Inherit" B-roll.
+- Double-clicking a scene-sheet problem jumps to the right line.
+- In the timed plan, `image #3` and `#` inside quoted text are no longer cut off as comments.
+- An instruction whose end phrase isn't in the recording shows a clear message instead of crashing.
+- Timed effects in a scene that switches pictures are shared out across the pictures correctly.
+- Images named by time (`0-05.png`): duplicate times no longer create empty scenes (the extra image is listed
+  as NOT used).
+- Imported instruction files with badly shaped entries are listed as import errors.
+
+**Other**
+- The Sound effects table shows the real level of effects placed by an editing instruction (change it in F8).
+- Clearing the images folder no longer empties scenes from a different folder with a similar name.
+- A new project no longer silently copies the previous project's instructions or continuity notes.
+- Directions box with no images, and cue CSV files with short rows or `1:23.5` times, no longer crash.
+
+**Still true:** AutoEditor has been tested on Linux only, not yet on Windows.
 
 ## New in v7.3: scene sheets ("STRICT VISUAL EDITING INSTRUCTIONS")
 

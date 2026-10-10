@@ -6,4 +6,4 @@ import os as _os
 _os.environ.setdefault("OPENCV_LOG_LEVEL", "FATAL")
 _os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
 
-__version__ = "7.3.0"
+__version__ = "7.3.1"
