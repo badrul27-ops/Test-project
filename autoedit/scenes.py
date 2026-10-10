@@ -312,7 +312,8 @@ def apply_motion_level(scenes, preset, level="Medium", seed=7):
         elif level == "Dynamic" and m in ("static", "subtle"):
             m = rng.choice(["zoom_in", "zoom_out", "pan_left", "pan_right"])
         if L > 8.0 and m in ("zoom_in", "zoom_out") and rng.random() < 0.4:
-            m = rng.choice(["pan_left", "pan_right", "subtle"])
+            # Dynamic never falls back to near-still motion
+            m = rng.choice(["pan_left", "pan_right"] + ([] if level == "Dynamic" else ["subtle"]))
         base = float(preset["zoom_amount"]) * rng.uniform(0.75, 1.3)
         lf = min(1.35, max(0.7, (L / 4.0) ** 0.5))
         s["motion"] = m
