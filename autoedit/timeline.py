@@ -22,7 +22,13 @@ from .media_bin import loader
 from .util import fmt_time
 
 # per-clip "visual" properties that move with the image when V1 visuals are reordered
-VISUAL_KEYS = ("media", "motion", "motion_amount", "zoom", "x", "y", "rot", "opacity", "keyframes", "adjust")
+# (clip range and framing belong to the picture, not to the narration slot)
+VISUAL_KEYS = ("media", "motion", "motion_amount", "motion_ease", "zoom", "x", "y", "rot", "opacity", "keyframes",
+               "adjust", "clip_in", "clip_out", "short_clip", "fit", "focus", "trim", "bg_color", "asset_id")
+
+
+def visual_locked(s):
+    return bool(s.get("locked")) or "primary_visual" in (s.get("locked_fields") or [])
 
 TRACKS = [  # key, label, sub, height
     ("broll", "V2", "B-roll", 30),
@@ -601,7 +607,10 @@ class TimelineWidget(QWidget):
                 self.cut_released.emit()
                 self.edited.emit("Move cut")
         elif m == "reorder" and d["target"] != d["i"]:
-            self.reorder_visuals(d["i"], d["target"])
+            if not self.reorder_visuals(d["i"], d["target"]):
+                self.request.emit("locked_visual", "scene", d["i"])
+                self.update()
+                return
             self.sel = ("scene", d["target"])
             self.selected.emit("scene", d["target"])
             self.edited.emit("Reorder visuals")
@@ -617,8 +626,10 @@ class TimelineWidget(QWidget):
 
     def reorder_visuals(self, i, j):
         """Move scene i's visual to position j; the visuals in between shift along. Scene timing
-        (from the narration) stays where it is."""
+        (from the narration) stays where it is. Returns False (nothing moved) if a locked scene is in the way."""
         sc = self.scenes
+        if any(visual_locked(s) for s in sc[min(i, j):max(i, j) + 1]):
+            return False
         vis = [{k: s.get(k) for k in VISUAL_KEYS} for s in sc]
         v = vis.pop(i)
         vis.insert(j, v)
@@ -628,6 +639,7 @@ class TimelineWidget(QWidget):
                     s.pop(k, None)
                 else:
                     s[k] = vv[k]
+        return True
 
     def mouseDoubleClickEvent(self, e):
         kind, i, part = self._hit(e.position().x(), e.position().y())

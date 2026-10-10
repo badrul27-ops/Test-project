@@ -809,6 +809,11 @@ class PropertiesPanel(QWidget):
 
     def _load_caption(self):
         c = self._caption()
+        if c is None:                          # captions changed since it was picked: nothing to edit there now
+            self.idx = -1
+            self.title.setText("Caption")
+            self.sub.setText("That caption no longer exists - click a caption on the CC track again.")
+            return
         self.title.setText(f"Caption {self.idx + 1}")
         self.sub.setText(f"{fmt_time(c['start'])} – {fmt_time(c['end'])}")
         self.c_info.setText(f"Words {c['i0'] + 1}–{c['i1'] + 1} of the transcript")

@@ -37,7 +37,7 @@ from autoedit.gui_widgets import PlayerWidget, TimelineScrollBar, thumb
 from autoedit.media_bin import MEDIA_FILTER, MediaBin, loader
 from autoedit.project import project_media
 from autoedit.properties import PropertiesPanel
-from autoedit.timeline import VISUAL_KEYS, TimelineWidget
+from autoedit.timeline import VISUAL_KEYS, TimelineWidget, visual_locked
 from autoedit import exportcfg as XC
 from autoedit.framing import FIT_HELP, FIT_MODES as FRAMING
 from autoedit.plan_panels import InstructionsPanel, ReviewPanel, ScriptPanel
@@ -90,6 +90,32 @@ DIRECTIONS_HELP = ("Paste your script split into scenes - ONE PARAGRAPH PER IMAG
 MOTION_LEVEL_HELP = {"None": "Still images don't move (use keyframes for exact moves).",
                      "Subtle": "Small, slow moves.", "Medium": "The preset's normal movement.",
                      "Dynamic": "Bigger, livelier moves; no still shots."}
+def _split_parts(a, b, cut_t):
+    """After cutting one clip into a (before) and b (after) at cut_t seconds into it: the second part
+    continues the footage instead of replaying it, and timed effects stay where they were on screen."""
+    from autoedit.visuals import probe_duration
+    m = b.get("media") or ""
+    if is_video(m):
+        cin = float(b.get("clip_in") or 0)
+        full = probe_duration(m) if os.path.isfile(m) else None
+        avail = (float(b["clip_out"]) if b.get("clip_out") else (full or 0)) - cin
+        if avail >= cut_t + 0.05:              # plays at normal speed here (short-clip loop/slow keep their rule)
+            b["clip_in"] = round(cin + cut_t, 3)
+    if a.get("effects") or b.get("effects"):
+        effs = a.get("effects") or []
+        a["effects"] = [dict(e, end=min(e["end"], cut_t)) for e in effs if e["start"] < cut_t - 1e-3]
+        b["effects"] = [dict(e, start=round(max(0.0, e["start"] - cut_t), 4), end=round(e["end"] - cut_t, 4))
+                        for e in effs if e["end"] > cut_t + 1e-3]
+
+
+CAPTION_INPUTS = ("captions", "caption_style", "caption_size", "aspect", "resolution")
+
+
+def _caption_inputs(state):
+    st = (state or {}).get("settings") or {}
+    return (state or {}).get("words"), tuple(st.get(k) for k in CAPTION_INPUTS)
+
+
 STATE_KEYS = ("name", "voiceover", "script", "media_dir", "music", "sfx_dir", "output_dir", "settings",
               "words", "duration", "scenes", "overlays", "chapters", "sfx_events", "sfx_planned",
               "broll", "extra_media", "excluded_media", "stock_assets", "directions",
@@ -170,7 +196,9 @@ class MainWindow(QMainWindow):
         if now == self._last_state:
             return False
         self.undo.push(label_text, self._last_state)
-        self._last_state = now
+        before, self._last_state = self._last_state, now
+        if _caption_inputs(before) != _caption_inputs(now) and hasattr(self, "timeline"):
+            self.refresh_timeline()            # caption blocks depend on these - keep the CC track in step
         self.update_status()
         return True
 
@@ -1394,7 +1422,7 @@ class MainWindow(QMainWindow):
         if key == "media_dir":
             folder = os.path.normcase(os.path.abspath(cur))
             using = [s for s in p.get("scenes", []) if s.get("media") and
-                     os.path.normcase(os.path.abspath(s["media"])).startswith(folder)]
+                     os.path.normcase(os.path.abspath(s["media"])).startswith(folder.rstrip(os.sep) + os.sep)]
             if using:
                 if QMessageBox.question(
                         self, "Remove images folder",
@@ -2549,6 +2577,7 @@ class MainWindow(QMainWindow):
             return
         a, b = copy.deepcopy(it), copy.deepcopy(it)
         a["end"] = b["start"] = round(t, 3)
+        _split_parts(a, b, a["end"] - it["start"])
         if a.get("keyframes"):
             cut_t = t - it["start"]
             a["keyframes"] = [k for k in a["keyframes"] if k["t"] <= cut_t] or None
@@ -2566,6 +2595,9 @@ class MainWindow(QMainWindow):
         p = self.project
         if kind == "scene" and 0 <= idx < len(p["scenes"]) - 1:
             src, dst = p["scenes"][idx], p["scenes"][idx + 1]
+            if visual_locked(dst):
+                self.status_msg("The next scene's visual is locked - unlock it first. Nothing was changed.")
+                return
             for k in VISUAL_KEYS:
                 if k in src:
                     dst[k] = copy.deepcopy(src[k])
@@ -2639,8 +2671,15 @@ class MainWindow(QMainWindow):
             self.sfx_panel.refresh()
             self.update_player_audio()
         if label_text in ("Move clip", "Trim clip"):
+            kind, idx = self.sel_item
+            lists = {"broll": self.project["broll"], "text": self.project["overlays"]}
+            picked = lists[kind][idx] if kind in lists and 0 <= idx < len(lists[kind]) else None
             for key in ("broll", "overlays"):
                 self.project[key].sort(key=lambda c: c["start"])
+            if picked is not None:                 # keep the SAME clip selected after re-sorting
+                idx = next(i for i, c in enumerate(lists[kind]) if c is picked)
+                self.sel_item = (kind, idx)
+                self.timeline.sel = (kind, idx)
             self.text_panel.refresh()
         self.invalidate_preview()
         self.commit(label_text)
@@ -2660,6 +2699,8 @@ class MainWindow(QMainWindow):
             self.replace_media()
         elif action == "remove_visual":
             self.remove_visual()
+        elif action == "locked_visual":
+            self.status_msg("A scene with a locked visual is in the way - unlock it first. Nothing was moved.")
         elif action == "edit" and kind == "caption":
             self.right_tabs.setCurrentWidget(self.props)
             self.props.c_text.setFocus()
@@ -2828,7 +2869,9 @@ class MainWindow(QMainWindow):
     def swap_next(self):
         k, sc = self.sel, self.project["scenes"]
         if 0 <= k < len(sc) - 1:
-            self.timeline.reorder_visuals(k, k + 1)
+            if not self.timeline.reorder_visuals(k, k + 1):
+                self.status_msg("One of these scenes has a locked visual - unlock it first. Nothing was swapped.")
+                return
             self.sel = k + 1
             self.sel_item = ("scene", k + 1)
             self.commit("Swap visuals")
@@ -2867,6 +2910,10 @@ class MainWindow(QMainWindow):
         a, b = copy.deepcopy(s), copy.deepcopy(s)
         a["end"], a["transition"] = round(t, 3), "cut"
         b["start"] = round(t, 3)
+        _split_parts(a, b, a["end"] - a["start"])
+        if s.get("id"):                        # every scene needs its own id (instructions, review, replan)
+            from autoedit.instructions import _fresh_id
+            b["id"] = _fresh_id(self.project)
         a["text"] = scene_text(words, a["start"], a["end"])
         b["text"] = scene_text(words, b["start"], b["end"])
         if b.get("motion") == "zoom_in":
@@ -3315,7 +3362,8 @@ class MainWindow(QMainWindow):
             return
         st = p["settings"]
         for k, v in last.items():
-            if k not in st or k in ("shuffle", "hook_title"):
+            # per-video text (instructions, continuity notes, hook title) never silently carries over
+            if k not in st or k in ("shuffle", "hook_title", "project_instructions", "continuity"):
                 continue
             d = st[k]
             try:

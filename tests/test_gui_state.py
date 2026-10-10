@@ -447,7 +447,70 @@ def main():
     assert (s2["motion"], s2["motion_amount"]) == ("subtle", 0.03), s2
     print("  volume/mute (preview only); lower panel toggle; scrollbar <-> zoom; "
           "categories set editable defaults + saved; motion levels None/Dynamic, clips untouched")
+    check_review_fixes(app, w4)
     print("GUI STATE OK")
+
+
+def check_review_fixes(app, w):
+    """Regressions: reorder/split keep clip settings + ids, locks respected, selection follows the clip,
+    caption track follows caption size, remembered defaults skip per-video text."""
+    from autoedit.captions import project_caption_spans
+    from autoedit.util import run_ffmpeg
+    tmp = tempfile.mkdtemp()
+    w.project = prj.load(make_project(tmp))
+    w.reset_state_tracking(saved=False)
+    w.refresh_all()
+    app.processEvents()
+    sc = w.project["scenes"]
+    # reorder: clip range and framing travel with the picture; a locked scene blocks the move
+    sc[0].update(clip_in=1.5, fit="fit_blur", focus=[0.2, 0.3])
+    m0 = sc[0]["media"]
+    assert w.timeline.reorder_visuals(0, 1)
+    assert sc[1]["media"] == m0 and sc[1].get("clip_in") == 1.5 and sc[1].get("focus") == [0.2, 0.3]
+    assert "clip_in" not in sc[0] and "focus" not in sc[0]
+    sc[2]["locked"] = True
+    before = [s["media"] for s in sc]
+    assert not w.timeline.reorder_visuals(1, 3) and [s["media"] for s in sc] == before
+    sc[2]["locked"] = False
+    # split a scene: the second half gets its own id
+    w.select_item("scene", 1)
+    w.player.seek((sc[1]["start"] + sc[1]["end"]) / 2)
+    n = len(sc)
+    w.split_at_playhead()
+    sc = w.project["scenes"]
+    assert len(sc) == n + 1 and len({s["id"] for s in sc}) == len(sc), [s["id"] for s in sc]
+    # split a video B-roll clip: the second part continues the footage, it doesn't replay it
+    clip = os.path.join(tmp, "b.mp4")
+    run_ffmpeg(["-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=6", "-pix_fmt", "yuv420p", clip])
+    w.project["broll"] = [{"media": clip, "start": 1.0, "end": 5.0, "mode": "insert", "clip_in": 0.5},
+                          {"media": clip, "start": 6.0, "end": 7.0, "mode": "insert"}]
+    w.refresh_all()
+    w.select_item("broll", 0)
+    w.player.seek(3.0)
+    w.split_at_playhead()
+    br = w.project["broll"]
+    assert (br[0]["clip_in"], br[1]["start"], br[1]["clip_in"]) == (0.5, 3.0, 2.5), br[:2]
+    # move a clip past another: the SAME clip stays selected after the list is re-sorted
+    first = br[0]
+    w.select_item("broll", 0)
+    first.update(start=7.5, end=8.5)
+    w.on_timeline_edited("Move clip")
+    kind, idx = w.sel_item
+    assert kind == "broll" and w.project["broll"][idx] is first, (kind, idx)
+    # caption size changes: the CC track is rebuilt to match the captions on screen
+    w.project["settings"]["caption_size"] = 170
+    w.commit("Caption size")
+    assert len(w.timeline.captions) == len(project_caption_spans(w.project))
+    # remembered defaults: style yes, this video's instructions / continuity notes no
+    QSettings().setValue("defaults/settings", {"caption_size": 130, "project_instructions": "cuts only",
+                                               "continuity": "same jacket"})
+    p2 = prj.new_project()
+    w._apply_new_project_defaults(p2)
+    assert p2["settings"]["caption_size"] == 130
+    assert p2["settings"]["project_instructions"] == "" and p2["settings"]["continuity"] == ""
+    QSettings().remove("defaults/settings")
+    print("  reorder/split keep clip settings and ids, locks respected, selection follows the clip, "
+          "CC track follows caption size, defaults skip per-video text")
 
 
 if __name__ == "__main__":

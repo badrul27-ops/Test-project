@@ -295,6 +295,17 @@ def check_review_fixes_2():
     assert miss and sheet.splitlines()[miss[0]["line"] - 1] == "Image: 099.png", miss
     # stock ideas: a word starting a sentence isn't taken for a name
     assert "storms" in suggest_terms("The war ended. Storms hit the coast")
+    # directions with no images yet; CSV short rows and 'm:ss.s' start times
+    from autoedit.cues import parse_csv, parse_directions
+    cues, note = parse_directions("First.\n\nSecond.", [])
+    assert cues == [] and "no images" in note
+    csv_a, csv_b = os.path.join(tmp, "a.csv"), os.path.join(tmp, "b.csv")
+    with open(csv_a, "w", encoding="utf-8") as f:
+        f.write("text,image\nhello\nworld,2.png\n")
+    with open(csv_b, "w", encoding="utf-8") as f:
+        f.write("1.png,1:23.5\n2.png,the war began\n")
+    assert parse_csv(csv_a) == [{"ref": "2.png", "text": "world"}]
+    assert [c.get("t") for c in parse_csv(csv_b)] == [83.5, None]
     print("  review fixes 2 (looped clip range, captions per shape, sheet round trip, comments) ok")
 
 

@@ -475,7 +475,14 @@ class SfxPanel(QWidget):
             it = QTableWidgetItem(e.get("cat", ""))
             it.setFlags(it.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(r, 2, it)
-            self.table.setItem(r, 3, QTableWidgetItem(f"{float(e.get('gain', 0)):+.1f}"))
+            if e.get("source"):                 # placed by an editing instruction: its level lives there
+                it = QTableWidgetItem(f"{float(e.get('rel_db') or 0):+.1f}")
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                it.setToolTip(f"Level relative to the narration, set by the editing instruction for scene "
+                              f"{e['source']}. Change it there (Editing instructions, F8).")
+                self.table.setItem(r, 3, it)
+            else:
+                self.table.setItem(r, 3, QTableWidgetItem(f"{float(e.get('gain', 0)):+.1f}"))
             import os as _os
             it = QTableWidgetItem(_os.path.basename(e.get("file", "")))
             it.setToolTip(e.get("file", ""))
@@ -515,7 +522,7 @@ class SfxPanel(QWidget):
                 e["enabled"] = item.checkState() == Qt.Checked
             elif c == 1:
                 e["t"] = max(0.0, round(float(item.text()), 3))
-            elif c == 3:
+            elif c == 3 and not e.get("source"):
                 e["gain"] = max(-30.0, min(20.0, float(item.text())))
             else:
                 return

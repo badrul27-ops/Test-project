@@ -139,12 +139,12 @@ def parse_csv(path):
         ci, ct, cs = 0, 1, None
     cues = []
     for r in rows:
-        if not r or not r[ci].strip():
+        if ci >= len(r) or not r[ci].strip():     # short or empty row
             continue
         cue = {"ref": r[ci].strip(), "text": r[ct].strip() if ct is not None and ct < len(r) else ""}
         if cs is not None and cs < len(r):
             cue["t"] = parse_time(r[cs])
-        elif ct is not None and ct < len(r) and parse_time(r[ct]) is not None and not _tok(r[ct])[1:]:
+        elif ct is not None and ct < len(r) and parse_time(r[ct]) is not None:     # '1:23.5' = a start time
             cue["t"] = parse_time(r[ct])
             cue["text"] = ""
         cues.append(cue)
@@ -306,6 +306,8 @@ def parse_directions(text, media):
     by_num, _ = media_index(media)
     if by_num:  # numbered images: follow the numbers (1, 2, 3 ...), not the folder listing
         order = [by_num[n][0] for n in sorted(by_num)] + [m for m in media if media_number(m) is None]
+    if not order:
+        return [], f"{len(clean)} paragraphs but no images yet - add an images folder first"
     cues = [{"ref": os.path.basename(m), "media": [m], "text": t} for m, t in zip(order, clean)]
     note = f"{len(clean)} paragraphs -> images 1..{len(cues)} in order"
     if len(clean) > len(order):
