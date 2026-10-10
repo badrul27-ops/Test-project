@@ -1,5 +1,6 @@
 """Render a project to MP4: visuals + motion + transitions + captions, then encode."""
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -150,8 +151,9 @@ def build_audio(project, work_dir, log=print):
             for e in use:
                 e["vol_db"] = round(max(-40.0, min(24.0, e["vol_db"] + sfx_db)), 1)
             log(f"SFX track volume {sfx_db:+.1f} dB applied to every effect.")
-        log(f"Sound effects in this render: {len(use)} (voice level {audio.voice_ref_db(project['voiceover']):.1f} dB, "
-            f"effects set {SFX_LEVELS[level]['offset_db']:+.0f} dB relative to it):")
+        lv = SFX_LEVELS.get(level)
+        log(f"Sound effects in this render: {len(use)} (voice level {vref:.1f} dB"
+            + (f", automatic effects set {lv['offset_db']:+.0f} dB relative to it" if lv else "") + "):")
         for e in use:
             log(f"  {e['t']:7.2f}s  {e['cat']:<14} {os.path.basename(e['file']):<22} vol {e['vol_db']:+.1f} dB  "
                 f"<- {e.get('reason', '')}")
@@ -188,8 +190,10 @@ def build_audio(project, work_dir, log=print):
             os.remove(os.path.join(work_dir, old))
         except OSError:
             pass
-    total = audio.mix(project["voiceover"], project["duration"], out, sfx_events=use,
+    part = out[:-4] + ".part.wav"             # only a finished mix gets the cache name
+    total = audio.mix(project["voiceover"], project["duration"], part, sfx_events=use,
                       log_path=os.path.join(work_dir, "ffmpeg_log.txt"), log=log, **kw)
+    os.replace(part, out)
     return out, total, use
 
 
@@ -237,7 +241,7 @@ def _encode(frame_fn, nframes, W, H, fps, audio_path, out_path, vcodec, log_path
         rc = enc.wait()
         if rc != 0:
             raise RuntimeError(f"Encoder failed (exit {rc}) - see {log_path}")
-    except (Cancelled, BrokenPipeError, OSError, RuntimeError) as e:
+    except BaseException as e:                 # any failure: stop the encoder and remove the partial file
         try:
             enc.kill()
         except Exception:
@@ -247,9 +251,7 @@ def _encode(frame_fn, nframes, W, H, fps, audio_path, out_path, vcodec, log_path
             os.remove(out_path)
         except OSError:
             pass
-        if isinstance(e, Cancelled):
-            raise
-        if isinstance(e, RuntimeError):
+        if not isinstance(e, OSError):        # Cancelled, RuntimeError, or a bug while building frames
             raise
         raise RuntimeError(f"Encoder stopped: {e} - see {log_path}")
     finally:
@@ -260,10 +262,15 @@ def _encode(frame_fn, nframes, W, H, fps, audio_path, out_path, vcodec, log_path
     return time.time() - t0
 
 
+def _safe_name(project):
+    """The project name as a file name that works on Windows too (no : / \\ ? * etc.)."""
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", project.get("name") or "").strip(" .") or "video"
+
+
 def final_path(project, fmt, W, H, draft=False, overwrite=False):
     """Completed-video name. Never replaces an existing file unless overwrite=True ('name (2).mp4')."""
     tag = fmt.replace(":", "x")
-    base = f"{project.get('name') or 'video'}_{'DRAFT_' if draft else ''}{tag}_{W}x{H}"
+    base = f"{_safe_name(project)}_{'DRAFT_' if draft else ''}{tag}_{W}x{H}"
     out = os.path.join(_out_dir(project), base + ".mp4")
     if overwrite or not os.path.exists(out):
         return out
@@ -447,10 +454,11 @@ def export_package(project, progress=None, should_stop=None, log=print):
     fmt = export_formats(st)[0]
     W, H = dims(fmt, st.get("resolution") or "Full HD")
     fps = int(st.get("fps", 30))
+    preflight(project, log)
     out_dir = _out_dir(project)
     work = os.path.join(out_dir, "_autoedit_work")
     os.makedirs(work, exist_ok=True)
-    pkg = os.path.join(out_dir, f"{project.get('name') or 'video'}_edit_package_{fmt.replace(':', 'x')}")
+    pkg = os.path.join(out_dir, f"{_safe_name(project)}_edit_package_{fmt.replace(':', 'x')}")
     os.makedirs(os.path.join(pkg, "clips"), exist_ok=True)
     os.makedirs(os.path.join(pkg, "audio"), exist_ok=True)
     log(f"Exporting editor package to {pkg}")
@@ -467,7 +475,7 @@ def export_package(project, progress=None, should_stop=None, log=print):
         for i, s in enumerate(scenes, 1):
             txt = s["text"].replace('"', "'")
             f.write(f'{i},{s["start"]:.3f},{s["end"]:.3f},{s["end"] - s["start"]:.3f},'
-                    f'"{os.path.basename(s.get("media", ""))}","{txt}"\n')
+                    f'"{os.path.basename(s.get("media") or "")}","{txt}"\n')
     comp = Compositor(project, W, H, fps, total=total, preview=False, captions=False,
                       cuts_only=True, log=log)
     vcodec, _kind = video_codec_args(st.get("encoder"), st.get("enc_quality") or "Standard", log, W, H)

@@ -375,7 +375,7 @@ def mix(voice, duration, out_wav, music=None, music_db=-20, sfx_events=(), sfx_d
                   f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
             log(f"Loudness: {float(m['input_i']):.1f} LUFS -> {loudness:.0f} LUFS")
         else:
-            af = "alimiter=limit=0.95"
+            af = "alimiter=limit=0.95:level=disabled"     # catch peaks only, don't re-level the mix
         run_ffmpeg(["-i", raw, "-af", af, "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", out_wav], log_path)
         try:
             os.remove(raw)

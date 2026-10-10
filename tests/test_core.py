@@ -188,7 +188,60 @@ def check_v3():
     print("  v3 (sfx, fonts, captions, overlays, variety, hook, chapters, quality) ok")
 
 
+def check_review_fixes():
+    """Regressions: instruction edge cases, safe output names, SFX level 'None' with explicit effects."""
+    from autoedit import instructions as I
+    from autoedit import project as P
+    from autoedit.render import _safe_name, build_audio
+    from autoedit.util import run_ffmpeg
+    tmp = tempfile.mkdtemp()
+    for n in ("001.png", "002.png"):
+        Image.new("RGB", (64, 36), (90, 90, 90)).save(os.path.join(tmp, n))
+    voice = os.path.join(tmp, "vo.wav")
+    run_ffmpeg(["-f", "lavfi", "-i", "sine=f=220:d=6", "-ar", "48000", voice])
+    p = P.new_project()
+    p.update(media_dir=tmp, voiceover=voice, output_dir=tmp, duration=6.0,
+             words=[{"w": w, "s": i * 0.5, "e": i * 0.5 + 0.4}
+                    for i, w in enumerate("the cat sat on the mat today and then she left home".split())])
+    p["scenes"] = [{"id": "S001", "start": 0.0, "end": 6.0, "media": os.path.join(tmp, "001.png"), "text": "",
+                    "motion": "none", "transition": "cut"}]
+    # end phrase not in the recording: reported, nothing applied (used to crash with TypeError)
+    rec = I.record(p, "S001")
+    s = rec["settings"]
+    s.update(narration_anchor={"text": "cat", "occurrence": 1}, end_anchor={"text": "banana"},
+             effects_mode="explicit", effects=[{"type": "saturation", "start_offset": 0}])
+    ok, msg = I.apply(p, "S001", log=lambda *_: None)
+    assert not ok and "banana" in msg, msg
+    # effects in a scene with two pictures: each picture gets its own part, times relative to itself
+    s.update(narration_anchor=None, end_anchor=None, timing_mode="absolute", start_seconds=0.0, end_seconds=6.0,
+             primary_visual={"asset_filename": "001.png"},
+             segments=[{"ref": "002.png", "start_seconds": 4.0}],
+             effects=[{"type": "saturation", "start_offset": 3.0, "end_offset": 5.0}])
+    ok, msg = I.apply(p, "S001", log=lambda *_: None)
+    assert ok, msg
+    a_, b_ = sorted(p["scenes"], key=lambda x: x["start"])
+    assert [(e["start"], e["end"]) for e in a_["effects"]] == [(3.0, 4.0)], a_["effects"]
+    assert [(e["start"], e["end"]) for e in b_["effects"]] == [(0.0, 1.0)], b_["effects"]
+    # badly shaped imported settings are listed, not crashed on later
+    bad = I._check_settings(dict(I.blank_settings(), primary_visual="001.png", narration_anchor={"occurrence": 2}))
+    assert any("primary_visual" in x for x in bad) and any("narration_anchor" in x for x in bad), bad
+    # file names that Windows can't store
+    assert _safe_name({"name": "Part 1: A/B?"}) == "Part 1_ A_B_" and _safe_name({"name": " .. "}) == "video"
+    # SFX level 'None' plus an explicit effect from an instruction: mixes instead of crashing
+    sfx = os.path.join(tmp, "hit.wav")
+    run_ffmpeg(["-f", "lavfi", "-i", "sine=f=900:d=0.3", "-ar", "48000", sfx])
+    p["settings"]["sfx_level"] = "None"
+    p["sfx_events"] = [{"t": 1.0, "file": sfx, "cat": "impact", "rel_db": -6.0, "source": "S001"}]
+    work = os.path.join(tmp, "_autoedit_work")
+    os.makedirs(work, exist_ok=True)
+    out, _total, use = build_audio(p, work, log=lambda *_: None)
+    assert os.path.isfile(out) and len(use) == 1
+    assert not [f for f in os.listdir(work) if f.endswith(".part.wav")]
+    print("  review fixes (instructions, names, SFX level None) ok")
+
+
 if __name__ == "__main__":
+    check_review_fixes()
     check_scenes()
     check_script()
     check_visuals()

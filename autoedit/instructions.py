@@ -975,6 +975,10 @@ def resolve(project, rec, ctx=None):
                                   "msg": "No time for this scene yet (the scene isn't on the timeline and no anchor "
                                          "or time is given)."})
         return plan
+    if b is None:                              # end phrase not found: already reported, nothing else can be timed
+        if not any(i.get("key") == "end_anchor" for i in rec["issues"]):
+            rec["issues"].append({"level": "error", "key": "timing", "msg": "The end of this scene couldn't be found."})
+        return plan
     # ---- clip range of the primary visual
     if s.get("clip_in") is not None or s.get("clip_out") is not None:
         m0 = segs[0]["media"] if segs else None
@@ -1084,10 +1088,6 @@ def resolve(project, rec, ctx=None):
                         rec["issues"].append({"level": "warning", "key": key, "accept": True,
                                               "msg": f"“{ac['text']}” isn't spoken inside this scene - the sound uses "
                                                      f"the occurrence at {_fmt(words[oc[0]]['s'])}."})
-                    if oc:
-                        rec["issues"].append({"level": "warning", "key": key,
-                                              "msg": f"“{ac['text']}” isn't spoken inside this scene - used the "
-                                                     f"occurrence at {_fmt(words[oc[0]]['s'])}."})
                 t = words[oc[0]]["s"] if oc else None       # sound starts with the word itself
             elif e.get("start_seconds") is not None:
                 t = float(e["start_seconds"])
@@ -1402,7 +1402,12 @@ def _write_fields(project, rec, plan):
         sc["sfx_mode"] = plan["sfx_mode"]
         sc["b_roll_mode"] = plan["b_roll_mode"]
         if plan["effects_mode"] == "explicit":
-            sc["effects"] = [e for e in plan["effects"]] if sc is mine[0] else []
+            # effect times are relative to the whole instruction; each segment gets its own part of them
+            off = sc["start"] - (plan["start"] if plan.get("start") is not None else mine[0]["start"])
+            seg_len = sc["end"] - sc["start"]
+            sc["effects"] = [dict(e, start=round(max(0.0, e["start"] - off), 4),
+                                  end=round(min(seg_len, e["end"] - off), 4))
+                             for e in plan["effects"] if e["end"] - off > 1e-3 and e["start"] - off < seg_len - 1e-3]
             prov["effects"] = prov_src
         elif plan["effects_mode"] == "none":
             sc["effects"] = []
@@ -1821,6 +1826,16 @@ def _check_settings(s):
         v = s.get(k)
         if v is not None and not isinstance(v, (int, float)):
             bad.append(f"{k} must be a number")
+    na = s.get("narration_anchor")
+    if na is not None and not (isinstance(na, dict) and isinstance(na.get("text"), str) and na["text"].strip()):
+        bad.append("narration_anchor must be an object with the spoken 'text'")
+    if s.get("end_anchor") is not None and not isinstance(s.get("end_anchor"), dict):
+        bad.append("end_anchor must be an object")
+    pv = s.get("primary_visual")
+    if pv is not None and not (isinstance(pv, dict) and isinstance(pv.get("asset_filename") or "", str)):
+        bad.append("primary_visual must be an object with an 'asset_filename'")
+    if not isinstance(s.get("segments") or [], list) or any(not isinstance(x, dict) for x in s.get("segments") or []):
+        bad.append("segments must be a list of objects")
     for k in ("b_roll_mode", "sfx_mode", "effects_mode"):
         if s.get(k) not in MODES:
             bad.append(f"{k} '{s.get(k)}' (use {', '.join(MODES)})")
