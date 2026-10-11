@@ -219,9 +219,16 @@ def replan(project, log=print):
             try:
                 timedplan.build(project, log)
                 return project
-            except ValueError as e:                # keep the analysis; show a draft and every problem
+            except ValueError as e:
+                # strict plan: never replace it with pictures in file order. The timeline stays as it was
+                # (empty if there was none) and every problem is listed; export stays blocked.
                 log(str(e))
-                log("Showing an automatic DRAFT until the plan is fixed - export stays blocked.")
+                project["plan_report"] = (["Editing plan NOT applied - fix the problems below. The timeline was "
+                                           "left unchanged (no automatic picture order is used)."]
+                                          + str(e).splitlines()[1:])
+                for line in project["plan_report"][:1]:
+                    log(line)
+                return project
         else:
             log("No timed edit plan yet - showing an automatic DRAFT so you can preview. Export stays blocked until "
                 "the plan covers the whole narration (Instructions tab → Timed edit plan → Fill template).")

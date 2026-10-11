@@ -176,65 +176,431 @@ def _strip_comment(line):
     return line
 
 
-def parse_plan(text, media, duration=None, fps=30, words=None):
-    """-> (rows, problems). rows: [{'line', 'start', 'end', 'ref', 'media', 'extras', 'text'}];
-    problems: [{'line', 'level': error|warning, 'msg'}]. Nothing is changed.
-    Two formats: one line per shot, or a scene sheet (SCENE 001 / Image: / Start: / End: … blocks)."""
+# ---------------------------------------------------------------------------- table / CSV columns
+COLUMNS = {
+    "scene": ("scene", "#", "no", "no.", "nr", "shot", "scene #", "scene no", "scene number", "number", "id",
+              "scene_id", "shot #"),
+    "image": ("image", "images", "file", "filename", "file name", "asset", "asset_filename", "visual", "media",
+              "picture", "photo", "clip", "img"),
+    "start": ("start", "from", "in", "start time", "start_seconds", "begin", "starts"),
+    "end": ("end", "to", "out", "end time", "end_seconds", "until", "ends"),
+    "duration": ("duration", "dur", "length", "seconds", "secs", "duration (s)", "duration_seconds", "time (s)"),
+    "time": ("time", "times", "timecode", "time range", "range", "timing"),
+    "motion": ("motion", "camera", "camera motion", "move", "movement", "animation", "ken burns"),
+    "notes": ("notes", "note", "description", "comment", "comments", "script", "narration", "script sentence",
+              "sentence", "purpose", "why", "what it shows", "content", "subject", "voiceover", "text (script)"),
+    "look": ("look", "extras", "instructions", "instruction", "edit", "editing", "details", "style"),
+    "transition": ("transition", "transition out", "transition to next", "transitions"),
+    "sfx": ("sfx", "sound", "sound effect", "sound effects", "audio"),
+    "broll": ("b-roll", "broll", "b roll", "v2", "cutaway"),
+    "effects": ("effect", "effects", "filter", "grade", "colour", "color"),
+    "text": ("text", "overlay", "on-screen text", "label", "title", "caption text"),
+    "framing": ("framing", "fit", "crop"),
+    "captions": ("captions", "subtitles"),
+}
+_COL = {name: key for key, names in COLUMNS.items() for name in names}
+MD_SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$|^\s*\|\s*:?-+:?\s*\|\s*$")
+TIME_ONLY = re.compile(r"^\s*" + TIME + r"\s*$", re.I)
+NOTE_FILE = re.compile(r"^(?P<ref>" + I.FILE_RE + r")\s*[:\-–—]+\s*(?P<note>.+)$", re.I)
+NOTE_SCENE = re.compile(r"^(?:scene|shot)\s*#?\s*(?P<num>\d+)\s*[:\-–—]+\s*(?P<note>.+)$", re.I)
+MOTION_WORDS = re.compile(r"\b(zoom(?! transition)|pan|push|pull|drift|still|static|no motion|ken burns|tilt|"
+                          r"truck|dolly|hold)\b", re.I)
+
+
+def _cells(line):
+    """'| a | b |' -> ['a', 'b'] (outer pipes optional)."""
+    t = line.strip()
+    if t.startswith("|"):
+        t = t[1:]
+    if t.endswith("|"):
+        t = t[:-1]
+    return [c.strip() for c in t.split("|")]
+
+
+def _unmd(t):
+    """Markdown decoration off: **bold**, `code`, leading bullets / numbering."""
+    t = re.sub(r"(\*\*|__|`)", "", t or "").strip()
+    return re.sub(r"^(?:[-*•>+]|\d+[.)])\s+", "", t).strip()
+
+
+def _header(cells):
+    """Column keys for a header row, or None if this isn't one (needs an image column + 2 known columns and
+    no times)."""
+    keys = [_COL.get(_unmd(c).lower().rstrip(":")) for c in cells]
+    if "image" not in keys or sum(1 for k in keys if k) < 2 or any(TIME_ONLY.match(_unmd(c)) for c in cells if c):
+        return None
+    return keys
+
+
+def _col_phrase(key, v):
+    """A cell from a named column -> a phrase Editing instructions understands."""
+    v = v.strip()
+    if not v or _mode_word(v) == "none" and key in ("transition", "sfx", "broll", "effects", "text"):
+        return ""
+    if key == "sfx" and not re.match(r"^(sfx|sound|play)\b", v, re.I):
+        return f"sfx {v}"
+    if key == "broll" and re.fullmatch(I.FILE_RE, v, re.I):
+        return f"show {v} as b-roll"
+    if key == "text" and not re.match(r"^text\b", v, re.I):
+        return f'text "{v.strip(chr(34))}"'
+    return v
+
+
+def _split_motion(extras):
+    """Phrases that are camera motion vs everything else (for the Motion / Look columns)."""
+    mo, rest = [], []
+    for x in _split_extras(extras or ""):
+        (mo if MOTION_WORDS.search(x) and not re.search(r"transition", x, re.I) else rest).append(x)
+    return ", ".join(mo), ", ".join(rest)
+
+
+def parse_entries(text, media, duration=None, fps=30, words=None):
+    """Every format -> one scene-plan schema. Returns (entries, rows, problems):
+      entries: one per scene line the plan tries to define (also the broken ones, for review) -
+               {line, scene, start, end, duration, ref, media, motion, look, notes, errors[], warnings[], fmt}
+      rows:    the valid entries, ready to build (times snapped to frames, exact values in start_raw/end_raw)
+      problems: [{'line', 'level': error|warning, 'msg'}]
+    Formats: compact lines (start - end | image | look), Markdown tables, CSV with a header row, scene sheets
+    (SCENE 001 blocks). Note lines ('- **065.jpg:** …', 'Scene 12: …') are attached to their scenes as notes -
+    never read as timing rows. Nothing is silently dropped: every other line is listed."""
     if is_sheet(text):
-        return parse_sheet(text, media, duration, fps, words)
+        rows, problems = parse_sheet(text, media, duration, fps, words)
+        entries = [dict(r, scene=r["line"], duration=r["end"] - r["start"], motion="", look="",
+                        errors=[], warnings=[p["msg"] for p in problems if p.get("line") and p["level"] == "warning"
+                                             and str(r["label"]) in p["msg"]], fmt="sheet",
+                        start_raw=r["start"], end_raw=r["end"]) for r in rows]
+        for e in entries:
+            e["motion"] = "; ".join(m for c, m in e.get("interp") or [] if m.startswith("motion"))
+        return entries, rows, problems
+    import csv
     index = C.media_index(media)
-    rows, problems = [], []
+    entries, problems, notes, prose = [], [], [], []
+    header, csv_header = None, None
+
+    def err(e, msg):
+        e["errors"].append(msg)
+        problems.append({"line": e["line"], "level": "error", "msg": msg})
+
     for n, raw in enumerate((text or "").splitlines(), 1):
         line = _strip_comment(raw).strip()
         if not line or line.startswith("//"):
             continue
+        if MD_SEP.match(line) or re.fullmatch(r"[-=*_ ]{3,}", line):    # table separator / horizontal rule
+            continue
+        e = {"line": n, "scene": None, "start": None, "end": None, "duration": None, "ref": "", "media": None,
+             "motion": "", "look": "", "notes": "", "errors": [], "warnings": [], "fmt": ""}
         m = RANGE.match(line)
-        if not m:
-            problems.append({"line": n, "level": "error",
-                             "msg": f"line {n}: needs a time range first, e.g. '0:04 - 0:09 | 002.png' - got “{line[:60]}”"})
+        if m and not line.startswith("|"):                      # compact: 0:04 - 0:09 | 002.png | look
+            e["fmt"] = "lines"
+            e["start"], e["end"] = parse_time(m.group(1)), parse_time(m.group(2))
+            rest = m.group("rest").strip()
+            parts = [x.strip() for x in rest.split("|")] if "|" in rest else None
+            if parts is not None:
+                ref, extras = parts[0], ", ".join(x for x in parts[1:] if x)
+            else:
+                mm = re.match(r"^(?:image|img|picture|photo|clip|file)?\s*#?\s*(" + I.FILE_RE +
+                              r"|\d+|\?+)\s*,?\s*(.*)$", rest, re.I)
+                ref, extras = (mm.group(1), mm.group(2)) if mm else ("", rest)
+            e["ref"] = ref
+            e["motion"], e["look"] = _split_motion(extras)
+            entries.append(e)
             continue
-        a, b = parse_time(m.group(1)), parse_time(m.group(2))
-        if a is None or b is None:
-            problems.append({"line": n, "level": "error", "msg": f"line {n}: can't read the times"})
+        cells = None
+        if "|" in line and line.count("|") >= 2 or line.startswith("|"):
+            cells = _cells(line)
+            h = _header(cells)
+            if h:
+                header, csv_header = h, None
+                bad = [c for c, k in zip(cells, h) if not k and c]
+                if bad:
+                    problems.append({"line": n, "level": "warning", "msg": f"line {n}: column(s) "
+                                     f"{', '.join(bad)} not understood - their cells are kept as notes"})
+                continue
+            e["fmt"] = "table"
+        elif "," in line and (csv_header or _header(next(csv.reader([line])))):
+            cells = [c.strip() for c in next(csv.reader([line]))]
+            h = _header(cells)
+            if h:
+                csv_header, header = h, None
+                continue
+            e["fmt"] = "csv"
+        if cells is not None:
+            keys = header if e["fmt"] == "table" else csv_header
+            extra_notes = []
+            if keys:
+                look = []
+                for k, c in zip(keys, cells):
+                    c = _unmd(c) if k != "notes" else c.strip()
+                    if not c:
+                        continue
+                    if k == "scene":
+                        e["scene"] = int(c) if c.isdigit() else None
+                    elif k == "image":
+                        e["ref"] = c
+                    elif k in ("start", "end"):
+                        e[k] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
+                        if e[k] is None:
+                            err(e, f"line {n}: {k} time “{c}” can't be read (use 01:56.84 or 116.84)")
+                    elif k == "duration":
+                        e["duration"] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
+                    elif k == "time":
+                        mr = RANGE.match(c)
+                        if mr:
+                            e["start"], e["end"] = parse_time(mr.group(1)), parse_time(mr.group(2))
+                    elif k == "motion":
+                        e["motion"] = c
+                    elif k == "notes":
+                        extra_notes.append(c)
+                    elif k:
+                        ph = _col_phrase(k, c)
+                        if ph:
+                            look.append(ph)
+                    else:
+                        extra_notes.append(c)
+                for c in cells[len(keys):]:
+                    if c:
+                        extra_notes.append(c)
+                e["look"] = ", ".join(look)
+            else:                                   # table row with no header: find the image and the times
+                plain = [_unmd(c) for c in cells]
+                im = next((i for i, c in enumerate(plain) if re.fullmatch(I.FILE_RE, c, re.I)), None)
+                if im is None:
+                    prose.append((n, line))
+                    continue
+                e["ref"] = plain[im]
+                for c in plain[:im]:
+                    if c.isdigit() and e["scene"] is None:
+                        e["scene"] = int(c)
+                times = []
+                for c in plain[im + 1:] + plain[:im]:
+                    mr = RANGE.match(c)
+                    if mr and not mr.group("rest"):
+                        times += [parse_time(mr.group(1)), parse_time(mr.group(2))]
+                    elif TIME_ONLY.match(c) and (":" in c or c not in [str(e["scene"])]):
+                        times.append(parse_time(c))
+                    elif c and c not in plain[:im]:
+                        extra_notes.append(c)
+                if len(times) >= 2:
+                    e["start"], e["end"] = times[0], times[1]
+                if len(times) >= 3:
+                    e["duration"] = times[2]
+            e["notes"] = " · ".join(extra_notes)
+            entries.append(e)
             continue
-        if b <= a:
-            problems.append({"line": n, "level": "error",
-                             "msg": f"line {n}: ends ({_f(b)}) before or when it starts ({_f(a)})"})
-            continue
-        rest = m.group("rest").strip()
-        parts = [p.strip() for p in rest.split("|")] if "|" in rest else None
-        if parts is not None:
-            ref, extras = parts[0], ", ".join(p for p in parts[1:] if p)
+        # not a scene row: a note for an image / a scene, or other text (listed, never silently dropped)
+        plain = _unmd(line)
+        mn = NOTE_FILE.match(plain) or NOTE_SCENE.match(plain)
+        if mn:
+            notes.append((n, mn.groupdict().get("ref"), mn.groupdict().get("num"), mn.group("note").strip()))
         else:
-            mm = re.match(r"^(?:image|img|picture|photo|clip|file)?\s*#?\s*(" + I.FILE_RE + r"|\d+|\?+)\s*,?\s*(.*)$",
-                          rest, re.I)
-            ref, extras = (mm.group(1), mm.group(2)) if mm else ("", rest)
-        ref = re.sub(r"^(?:image|img|picture|photo|clip|file)\s*#?\s*", "", ref.strip(), flags=re.I)
+            prose.append((n, line))
+    # ---- check each entry; times: start/end are authoritative, a given duration is only checked
+    seen_scene = {}
+    for e in entries:
+        n = e["line"]
+        lab = f"line {n}" + (f" (scene {e['scene']})" if e["scene"] is not None else "")
+        e["label"] = lab
+        if e["start"] is None or e["end"] is None:
+            if not e["errors"]:
+                err(e, f"{lab}: needs a start and an end time, e.g. '0:04 - 0:09 | 002.png' or a table row "
+                       f"'| 002.png | 0:04 | 0:09 |'")
+            continue
+        if e["end"] <= e["start"]:
+            err(e, f"{lab}: ends ({_f(e['end'])}) before or when it starts ({_f(e['start'])})")
+            continue
+        if e["duration"] is not None and abs((e["end"] - e["start"]) - e["duration"]) > 0.02:
+            msg = (f"{lab}: duration {e['duration']:.2f} s doesn't match start/end ({e['end'] - e['start']:.2f} s) "
+                   f"- start/end are used")
+            e["warnings"].append(msg)
+            problems.append({"line": n, "level": "warning", "msg": msg})
+        if e["scene"] is not None:
+            if e["scene"] in seen_scene:
+                msg = f"{lab}: scene {e['scene']} also appears on line {seen_scene[e['scene']]}"
+                e["warnings"].append(msg)
+                problems.append({"line": n, "level": "warning", "msg": msg})
+            seen_scene.setdefault(e["scene"], n)
+        ref = re.sub(r"^(?:image|img|picture|photo|clip|file)\s*#?\s*", "", e["ref"].strip(), flags=re.I)
+        e["ref"] = ref
         if not ref or set(ref) <= {"?"}:
-            problems.append({"line": n, "level": "error", "msg": f"line {n} ({_f(a)}-{_f(b)}): choose an image"})
+            err(e, f"{lab} ({_f(e['start'])}-{_f(e['end'])}): choose an image")
             continue
-        path = _resolve_image(ref, media, index, n, problems)
-        if path is None:
+        before = len(problems)
+        e["media"] = _resolve_image(ref, media, index, n, problems)
+        for pr in problems[before:]:
+            pr["msg"] = pr["msg"].replace(f"line {n}:", f"{lab}:", 1)
+            (e["errors"] if pr["level"] == "error" else e["warnings"]).append(pr["msg"])
+    rows = []
+    for k, e in enumerate(entries):
+        if e["errors"] or not e["media"]:
             continue
-        a, b = I.snap(a, fps), I.snap(b, fps)
-        rows.append({"line": n, "start": a, "end": b, "ref": ref, "media": path, "extras": extras.strip()})
+        e["extras"] = ", ".join(x for x in (e["motion"], e["look"]) if x)
+        rows.append({"line": e["line"], "scene": e["scene"], "start": I.snap(e["start"], fps),
+                     "end": I.snap(e["end"], fps), "start_raw": e["start"], "end_raw": e["end"], "ref": e["ref"],
+                     "media": e["media"], "extras": e["extras"], "notes": e["notes"], "entry": e})
+    # ---- notes lines -> their scenes (by image file or scene number)
+    attached = 0
+    for n, ref, num, note in notes:
+        if ref:
+            hit = [e for e in entries if e["ref"] and os.path.basename(e["ref"]).lower() == ref.lower()
+                   or e["media"] and os.path.basename(e["media"]).lower() == ref.lower()]
+            what = ref
+        else:
+            hit = [e for e in entries if e["scene"] == int(num)] or (
+                [entries[int(num) - 1]] if not any(e["scene"] is not None for e in entries)
+                and 0 < int(num) <= len(entries) else [])
+            what = f"scene {num}"
+        if not hit:
+            problems.append({"line": n, "level": "warning",
+                             "msg": f"line {n}: note for {what} - {what} isn't in the plan, so the note is NOT "
+                                    "attached to anything (it stays in the plan text)"})
+            continue
+        if len(hit) > 1:
+            problems.append({"line": n, "level": "warning",
+                             "msg": f"line {n}: note for {what} - {what} is used by {len(hit)} scenes (lines "
+                                    f"{', '.join(str(e['line']) for e in hit)}); attached to all of them"})
+        for e in hit:
+            e["notes"] = (e["notes"] + " · " if e["notes"] else "") + note
+            e.setdefault("note_lines", []).append(n)
+        attached += 1
+    for r in rows:
+        r["notes"] = r["entry"]["notes"]
+    with_notes = sum(1 for e in entries if e["notes"])
+    if with_notes:
+        problems.append({"line": 0, "level": "warning",
+                         "msg": f"{with_notes} scene(s) have notes ({attached} note line(s) attached). Notes are "
+                                "kept with the scene but NOT applied as editing instructions - put editing words "
+                                "in the Motion / Look columns (or the scene details)."})
+    for n, line in prose:
+        problems.append({"line": n, "level": "warning",
+                         "msg": f"line {n}: not a scene row or a note - NOT used: “{_unmd(line)[:70]}”"})
     _coverage(rows, duration, problems)
-    # extras: every phrase must be understood (listed otherwise, never silently ignored)
+    # look phrases: every phrase must be understood (listed otherwise, never silently ignored)
     for r in rows:
         if not r["extras"]:
             r["text"] = ""
             continue
         phrases = [_phrase(x) for x in _split_extras(r["extras"])]
-        r["text"] = ". ".join(p.rstrip(".") for p in phrases) + "."
+        r["text"] = ". ".join(x.rstrip(".") for x in phrases) + "."
         _, interp, unresolved, _ = I.parse(r["text"])
+        r["interp"] = r["entry"]["interp"] = interp
         for u in unresolved:
-            problems.append({"line": r["line"], "level": "warning",
-                             "msg": f"line {r['line']}: “{u}” not understood - ignored"})
+            msg = f"line {r['line']}: “{u}” not understood - NOT applied"
+            r["entry"]["warnings"].append(msg)
+            problems.append({"line": r["line"], "level": "warning", "msg": msg})
         if any(m_.startswith("visual ") for _, m_ in interp):
-            problems.append({"line": r["line"], "level": "warning",
-                             "msg": f"line {r['line']}: put one image per line (extra images on a line are ignored)"})
-    if not rows and not problems:
-        problems.append({"line": 0, "level": "error", "msg": "The timed edit plan is empty."})
+            msg = f"line {r['line']}: put one image per scene (extra images on a line are ignored)"
+            r["entry"]["warnings"].append(msg)
+            problems.append({"line": r["line"], "level": "warning", "msg": msg})
+    if not entries and not any(p["level"] == "error" for p in problems):
+        problems.append({"line": 0, "level": "error", "msg": "The editing plan has no scenes yet."})
+    return entries, rows, problems
+
+
+TABLE_HEAD = "| Scene | Image | Start | End | Duration | Motion | Look | Notes |"
+SHEET_LABELS = {"image": "Image", "start": "Start", "end": "End", "duration": "Duration", "motion": "Motion",
+                "notes": "Notes"}
+
+
+def _structure_line(line):
+    """Header / separator / rule lines of a table or CSV (not content)."""
+    t = _strip_comment(line).strip()
+    if not t:
+        return False                           # a comment line: kept as it is
+    if MD_SEP.match(t) or re.fullmatch(r"[-=*_ ]{3,}", t):
+        return True
+    if "|" in t and _header(_cells(t)):
+        return True
+    if "," in t and "|" not in t:
+        import csv
+        return bool(_header([c.strip() for c in next(csv.reader([t]))]))
+    return False
+
+
+def plan_as_table(text, entries):
+    """The plan as ONE Markdown table (all scenes, notes merged into the Notes column). Lines that are not
+    scenes and not attached notes (comments, unattached notes, other text) are kept below it unchanged."""
+    used = {e["line"] for e in entries} | {n for e in entries for n in e.get("note_lines", [])}
+    out = [TABLE_HEAD, "|---|---|---|---|---|---|---|---|"]
+
+    def cell(v):
+        return str(v if v is not None else "").replace("|", "/").replace("\n", " ").strip()
+    for k, e in enumerate(entries, 1):
+        a, b = e.get("start"), e.get("end")
+        dur = f"{b - a:.3f}" if a is not None and b is not None else (
+            f"{e['duration']:.3f}" if e.get("duration") is not None else "")
+        out.append("| " + " | ".join(cell(x) for x in (
+            e["scene"] if e.get("scene") is not None else k, e.get("ref") or "",
+            _tc(a) if a is not None else "", _tc(b) if b is not None else "", dur,
+            e.get("motion") or "", e.get("look") or "", e.get("notes") or "")) + " |")
+    first = min(used) if used else 10 ** 9
+    keep = [(n, ln) for n, ln in enumerate((text or "").splitlines(), 1)
+            if n not in used and ln.strip() and not _structure_line(ln)]
+    head = [ln for n, ln in keep if n < first]          # e.g. a title comment stays above the table
+    tail = [ln for n, ln in keep if n > first]
+    return "\n".join(head + out + ([""] + tail if tail else [])) + "\n"
+
+
+def _sheet_set(text, block_line, key, value):
+    """Set one field of a SCENE block in place (added at the end of the block if it isn't there)."""
+    lines = (text or "").splitlines()
+    i0 = block_line - 1
+    i1 = next((j for j in range(i0 + 1, len(lines)) if SHEET_RE.match(lines[j])), len(lines))
+    new = f"{SHEET_LABELS[key]}: {value}"
+    for j in range(i0 + 1, i1):
+        fm = FIELD_RE.match(lines[j])
+        if fm and _key(fm.group(1)) == key:
+            lines[j] = new
+            break
+    else:
+        last = i1
+        while last - 1 > i0 and not lines[last - 1].strip():
+            last -= 1
+        lines.insert(last, new)
+    return "\n".join(lines) + "\n"
+
+
+def edit_entry(text, entries, idx, field, value):
+    """A change made in the review table -> new plan text. field: image/start/end/motion/notes/look.
+    Returns (new_text, message). Times must be readable; nothing changes otherwise."""
+    e = entries[idx]
+    value = (value or "").strip()
+    if field in ("start", "end"):
+        t = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", value, flags=re.I))
+        if t is None:
+            return text, f"“{value}” isn't a time - use 01:56.84 or 116.84. Nothing was changed."
+    if e.get("fmt") == "sheet":
+        if field == "look":
+            return text, "Scene sheets keep sound, B-roll, effects and transitions in their own fields - edit them " \
+                         "in the plan text. Nothing was changed."
+        bl = e.get("src_line") or e["line"]
+        if field in ("start", "end"):
+            a = t if field == "start" else e["start"]
+            b = t if field == "end" else e["end"]
+            text = _sheet_set(text, bl, field, _tc(t))
+            if a is not None and b is not None and b > a:
+                text = _sheet_set(text, bl, "duration", f"{b - a:.3f} seconds")
+        else:
+            text = _sheet_set(text, bl, "image" if field == "image" else field, value)
+        return text, ""
+    e = dict(e)
+    if field in ("start", "end"):
+        e[field] = t
+        e["duration"] = None
+    elif field == "image":
+        e["ref"] = value
+    else:
+        e[field] = value
+    new = list(entries)
+    new[idx] = e
+    was_table = all(x.get("fmt") == "table" for x in entries) and TABLE_HEAD in (text or "").splitlines()
+    return plan_as_table(text, new), ("" if was_table else
+                                      "The plan text was rewritten as one table so your change could be saved "
+                                      "(nothing else was changed; Ctrl+Z undoes).")
+
+
+def parse_plan(text, media, duration=None, fps=30, words=None):
+    """-> (rows, problems). Nothing is changed. See parse_entries for the formats."""
+    _entries, rows, problems = parse_entries(text, media, duration, fps, words)
     return rows, problems
 
 
@@ -355,6 +721,8 @@ def build(project, log=print):
             keep = {}
         else:
             s, interp, unresolved, notes = I.parse(r["text"]) if r["text"] else (I.blank_settings(), [], [], None)
+            if r.get("notes"):                  # descriptive notes from the plan: kept with the scene, not applied
+                notes = (notes or []) + [r["notes"]]
         s.update(timing_mode="absolute", start_seconds=r["start"], end_seconds=r["end"], narration_anchor=None,
                  end_anchor=None, primary_visual={"asset_filename": os.path.basename(r["media"])}, segments=[])
         s.update({k_: v for k_, v in keep.items() if v})

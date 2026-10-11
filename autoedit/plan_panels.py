@@ -29,11 +29,6 @@ PROJECT_HELP = """Project instructions apply to the whole video (one per line). 
   • don't repeat images  /  allow repeats
   • scenes of 3-8 seconds
 Lines that aren't understood are listed - they are never silently guessed."""
-SCENE_HELP = """Scene instructions - one per line, e.g.
-  Use image 003 while the narrator discusses the letter; keep it until the next topic.
-  Use 12.png from 1:20 to 1:31
-  Show clip 7 when the narrator says "the river burst its banks" for 5 seconds (lock)
-Or paste your script split into ONE PARAGRAPH PER IMAGE (paragraph 1 = image 1 …), or use [1] [2] markers."""
 
 
 def _status(s):
@@ -168,30 +163,61 @@ class ScriptPanel(QWidget):
 
 # ============================================================================ Instructions
 class InstructionsPanel(QWidget):
+    """Instructions tab: ONE editing plan (what is shown when), then the whole-video guidelines and the
+    optional helpers for 'Smart' mode. The narration script lives in the Script tab."""
+
     def __init__(self, win):
         super().__init__()
         self.win = win
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.timed = TimedPlanBox(win)
-        lay.addWidget(self.timed)
-        lay.addWidget(label("Project guidelines", "Section"))
-        lay.addWidget(label("Written guidance for the whole video (rule-based - lines it doesn't understand are "
-                            "listed), then the structured settings below. Scenes inherit these unless their own "
-                            "instruction says otherwise.", "Help"))
+        self.plan_panel = EditingPlanPanel(win)
+        self.timed = self.plan_panel                 # older name
+        lay.addWidget(self.plan_panel, 3)
+        row = QVBoxLayout()                    # stacked: the side panel can be narrow
+        b_ins = QPushButton("Editing instructions per scene… (F8)")
+        b_ins.setToolTip("Scene-by-scene visual, timing, motion, B-roll, sound, effects, transitions and locks")
+        b_ins.clicked.connect(lambda: self.win.open_instructions())
+        b_rev = QPushButton("Review scenes…")
+        b_rev.setToolTip("What each scene shows, why it was chosen, and what needs a decision (Ctrl+Shift+R)")
+        b_rev.clicked.connect(lambda: self.win.open_review_window())
+        row.addWidget(b_ins)
+        row.addWidget(b_rev)
+        lay.addLayout(row)
+
+        def section(title, open_=False):
+            btn = QToolButton()
+            btn.setCheckable(True)
+            body = QWidget()
+            bl = QVBoxLayout(body)
+            bl.setContentsMargins(0, 0, 0, 0)
+
+            def toggled(c):
+                body.setVisible(c)
+                btn.setText(title + (" ▾" if c else " ▸"))
+            btn.toggled.connect(toggled)
+            btn.setChecked(open_)
+            toggled(open_)
+            lay.addWidget(btn)
+            lay.addWidget(body)
+            return bl
+
+        g = section("Project guidelines (whole video)")
+        g.addWidget(label("Written guidance for the whole video (rule-based - lines it doesn't understand are "
+                          "listed), then the structured settings below. Scenes follow these unless the editing plan "
+                          "says otherwise for that scene.", "Help"))
         self.proj = QPlainTextEdit()
-        self.proj.setPlaceholderText("e.g.\nno camera motion\nkeep the images in chronological order\n"
-                                     "scenes of 3-8 seconds")
-        self.proj.setMinimumHeight(80)
+        self.proj.setPlaceholderText("e.g.\nno camera motion\nscenes of 3-8 seconds")
+        self.proj.setMinimumHeight(70)
         self.proj.setTabChangesFocus(True)
         self._t = QTimer(self)
         self._t.setSingleShot(True)
         self._t.setInterval(700)
         self._t.timeout.connect(self.save_project_instr)
         self.proj.textChanged.connect(self._t.start)
-        lay.addWidget(self.proj)
+        g.addWidget(self.proj)
         self.proj_fb = label("", "Help")
-        lay.addWidget(self.proj_fb)
+        g.addWidget(self.proj_fb)
         more = QToolButton()
         more.setText("Supported phrases ▸")
         more.setCheckable(True)
@@ -199,55 +225,33 @@ class InstructionsPanel(QWidget):
         self.help.setVisible(False)
         more.toggled.connect(lambda c: (self.help.setVisible(c), more.setText("Supported phrases ▾" if c else
                                                                                "Supported phrases ▸")))
-        lay.addWidget(more)
-        lay.addWidget(self.help)
+        g.addWidget(more)
+        g.addWidget(self.help)
         self.guide = GuidelinesBox(win)
-        lay.addWidget(self.guide)
-        lay.addWidget(label("Scene instructions", "Section"))
-        self.scene = win._directions_box(130)
-        self.scene.setPlaceholderText(SCENE_HELP)
-        self.scene.setToolTip(SCENE_HELP)
-        lay.addWidget(self.scene)
-        lay.addWidget(label("Order of authority: locked scenes › your scene instructions / scene map › project "
-                            "instructions › automatic choices.", "Help"))
-        r = QVBoxLayout()
+        g.addWidget(self.guide)
+        h = section("Smart mode helpers")
+        h.addWidget(label("Not used by the editing plan. Only for scene mode 'Smart': it matches images to the script by meaning, using "
+                          "descriptions you import. Image content is not analysed by an AI model. Nothing is "
+                          "uploaded anywhere. Re-plan from the Scenes page.", "Help"))
         b1 = QPushButton("Import scene map…")
         b1.setToolTip("CSV or JSON with columns: scene_id, asset_filename, script_excerpt, start_seconds, "
                       "end_seconds, fit_mode, motion, locked")
         b1.clicked.connect(self.import_map)
         b2 = QPushButton("Import image prompts…")
         b2.setToolTip("The prompts / descriptions your images were made from (CSV/JSON with asset_filename + "
-                      "prompt, or a .txt with one prompt per paragraph in image order). Used to match "
-                      "images to the script by meaning.")
+                      "prompt, or a .txt with one prompt per paragraph in image order).")
         b2.clicked.connect(self.import_prompts)
-        r.addWidget(b1)
-        r.addWidget(b2)
-        lay.addLayout(r)
+        h.addWidget(b1)
+        h.addWidget(b2)
         self.map_info = label("", "Help")
-        lay.addWidget(self.map_info)
+        h.addWidget(self.map_info)
         self.b_clear_map = QPushButton("Remove imported scene map")
         self.b_clear_map.clicked.connect(self.clear_map)
-        lay.addWidget(self.b_clear_map)
-        b_ins = QPushButton("Editing instructions per scene… (F8)")
-        b_ins.setToolTip("Scene-by-scene visual, timing, motion, B-roll, sound, effects, transitions and locks")
-        b_ins.clicked.connect(lambda: self.win.open_instructions())
-        lay.addWidget(b_ins)
-        self.b_plan = QPushButton("Plan scenes (keeps locked scenes)")
-        self.b_plan.setProperty("primary", True)
-        self.b_plan.setToolTip("Re-plans with 'Smart' mode: topic changes in the script decide WHEN, image "
-                               "descriptions decide WHAT. Locked scenes are kept. Ctrl+Z undoes.")
-        self.b_plan.clicked.connect(self.plan)
-        lay.addWidget(self.b_plan)
-        b_rev = QPushButton("Review scenes…")
-        b_rev.setToolTip("What each scene shows, why it was chosen, and what needs a decision (Ctrl+Shift+R)")
-        b_rev.clicked.connect(lambda: self.win.open_review_window())
-        lay.addWidget(b_rev)
+        h.addWidget(self.b_clear_map)
         self.issues = QListWidget()
-        self.issues.setMinimumHeight(90)
-        lay.addWidget(self.issues, 1)
-        lay.addWidget(label("Image content is not analysed by an AI model in this version. Matching uses the "
-                            "prompts/descriptions you import, a .txt next to an image (same name), or text that "
-                            "image generators embed in PNG/JPEG files. Nothing is uploaded anywhere.", "Help"))
+        self.issues.setMaximumHeight(110)
+        h.addWidget(self.issues)
+        lay.addStretch(0)
 
     def load(self):
         st = self.win.project["settings"]
@@ -330,7 +334,7 @@ class InstructionsPanel(QWidget):
                               f"{len(p.get('asset_meta') or {})}")
 
     def plan(self):
-        self.win._save_directions(self.scene)
+        """Smart-mode planning (Scenes page → Re-plan uses the same). Not used for the editing plan."""
         self.save_project_instr()
         st = self.win.project["settings"]
         if st.get("scene_mode") != "smart":
@@ -741,101 +745,153 @@ class GuidelinesBox(QWidget):
                             "instructions and locks stay).")
 
 
-# ============================================================================ Timed edit plan (required)
-PLAN_HELP = """One line per shot:   start - end | image | how it looks (optional)
-0:00 - 0:04.5 | 001.png | slow zoom in, crossfade
-0:04.5 - 0:09 | 002 | pan right, sfx whoosh.wav, text "Morocco, 15,000 years ago"
-0:09 - 0:12 | 003.png | still, b&w, cut
-Press 'Fill template from narration' after Analyze: every sentence gets a line with its exact times -
-you only replace ??? with the image."""
+# ============================================================================ Editing plan (required)
+PLAN_HELP = """Paste your complete editing plan - any of these work, and they can be mixed with notes:
+
+  01:56.84 - 02:06.76 | 023.jpg | slow zoom in, crossfade
+
+  | Scene | Image   | Start    | End      | Duration | Motion       | Notes            |
+  |-------|---------|----------|----------|----------|--------------|------------------|
+  | 23    | 023.jpg | 01:56.84 | 02:06.76 | 9.92     | slow zoom in | plaque close-up  |
+
+  image,start,end,motion,notes        (CSV with a header row)
+
+  SCENE 023 / Image: 023.jpg / Start: 01:56.840 / End: 02:06.760 …   (scene blocks)
+
+  - **023.jpg:** a note about this image     (notes go to that image's scene - not applied as edits)
+
+Start and End decide the timing; a Duration column is only checked. Shots must cover the whole narration
+with no gaps or overlaps. Anything not understood is listed - never guessed."""
+DETAIL_GROUPS = (("Transition", ("transition",)), ("Sound effects", ("sound",)), ("B-roll", ("b-roll",)),
+                 ("Effects and text", ("effect",)), ("Framing and captions", ("framing", "captions", "focus")),
+                 ("Lock", ("lock",)))
 
 
-class TimedPlanBox(QWidget):
-    """The required timed edit plan: which image from which second to which second, and how it looks."""
+class EditingPlanPanel(QWidget):
+    """THE editing plan: paste or import it, validate it, review every scene in a table, apply it to the
+    timeline. Strict: the timeline gets exactly these images and times - never a file-order fallback."""
+    COLS = ("Image", "Start", "End", "Duration", "Motion", "Notes", "Status")
+    FIELDS = ("image", "start", "end", None, "motion", "notes", None)
 
     def __init__(self, win, big=False):
         super().__init__()
         from PySide6.QtGui import QFontDatabase
-        self.win = win
+        from PySide6.QtWidgets import QLineEdit, QMenu, QSplitter
+        self.win, self.entries, self._filling = win, [], False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(label("Timed edit plan (required)", "Section"))
-        lay.addWidget(label("You decide which image is on screen from which second to which second. AutoEditor "
-                            "builds exactly that - it never moves a cut or swaps a picture. Shots must cover the whole "
-                            "narration without gaps or overlaps; the narration is never cut or stretched.", "Help"))
+        lay.addWidget(label("Editing plan", "Section"))
+        lay.addWidget(label("Paste or import your whole plan: which image is on screen from which second to which "
+                            "second, plus how it should look. Validate shows every scene below; Apply puts exactly "
+                            "those images and times on the timeline. The narration script stays in the Script tab.",
+                            "Help"))
         self.edit = QPlainTextEdit()
         self.edit.setPlaceholderText(PLAN_HELP)
         self.edit.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
-        self.edit.setMinimumHeight(220)
         self.edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.edit.setMinimumHeight(120 if not big else 260)
         self._t = QTimer(self)
         self._t.setSingleShot(True)
         self._t.setInterval(800)
         self._t.timeout.connect(self.save)
         self.edit.textChanged.connect(self._t.start)
-        lay.addWidget(self.edit, 1)
-        r1, r2 = QHBoxLayout(), QHBoxLayout()
-        b_tpl = QPushButton("Fill template from narration")
-        b_tpl.setToolTip("One line per sentence with the exact times from your recording - replace ??? with images")
-        b_tpl.clicked.connect(self.fill_template)
-        b_load = QPushButton("Load plan file…")
-        b_load.setToolTip(".txt in the format above, or .csv with columns start, end, image, look")
-        b_load.clicked.connect(self.load_file)
-        b_chk = QPushButton("Check plan")
-        b_chk.clicked.connect(self.check)
-        self.b_build = QPushButton("Build timeline from plan")
-        self.b_build.setProperty("primary", True)
-        self.b_build.clicked.connect(self.build)
-        b_sheet = QPushButton("Fill scene-sheet template")
-        b_sheet.setToolTip("SCENE 001 / Image: / Start: / End: / Motion: … blocks with each sentence and its exact "
-                           "times filled in")
-        b_sheet.clicked.connect(lambda: self.fill_template(sheet=True))
-        b_sync = QPushButton("Update plan from timeline")
-        b_sync.setToolTip("Write the current timeline (with your edits) back into the plan as a scene sheet")
-        b_sync.clicked.connect(self.from_timeline)
-        r1.addWidget(b_tpl)
-        r1.addWidget(b_sheet)
-        r1.addWidget(b_load)
-        r2.addWidget(b_sync)
-        if not big:
-            b_big = QPushButton("Open big editor…")
-            b_big.setToolTip("Edit the plan in a large window (same plan)")
-            b_big.clicked.connect(lambda: self.win.open_plan_window())
-            r2.addWidget(b_big)
-        r2.addWidget(b_chk)
-        r2.addWidget(self.b_build)
-        lay.addLayout(r1)
-        lay.addLayout(r2)
-        self.status = label("", "Help")
-        lay.addWidget(self.status)
-        self.problems = QListWidget()
-        self.problems.setMaximumHeight(130)
-        self.problems.itemDoubleClicked.connect(self._goto)
-        lay.addWidget(self.problems)
+        r = QHBoxLayout()
+        b_imp = QPushButton("Import Plan…")
+        b_imp.setToolTip("A .txt / .md / .csv file with your plan (replaces the text above)")
+        b_imp.clicked.connect(self.import_plan)
+        b_val = QPushButton("Validate")
+        b_val.setToolTip("Check every scene - file names, times, gaps and overlaps. Nothing is changed.")
+        b_val.clicked.connect(self.validate)
+        self.b_apply = QPushButton("Apply to Timeline")
+        self.b_apply.setProperty("primary", True)
+        self.b_apply.setToolTip("Validate, then put exactly these images and times on the timeline (Ctrl+Z undoes). "
+                                "If anything is wrong, nothing is applied.")
+        self.b_apply.clicked.connect(self.apply)
         more = QToolButton()
-        more.setText("Words you can use after the image ▸")
-        more.setCheckable(True)
-        words = label("Motion: slow zoom in, zoom out, pan left/right/up/down, zoom in + pan right, still · "
-                      "Transition to the next shot: cut, crossfade (0.8), fade, slide, whip · Sound: sfx paper.wav "
-                      "(at “opened”, -14 dB, fade in 0.2) · Look: b&w, sepia, warm, cold, blur, vignette, darker, "
-                      "brighter, more contrast · Text: text \"Morocco, 1910\" · Framing: fill, fit, focus on the top "
-                      "left · Captions: no captions, captions at the top · lock. Separate them with commas. Anything "
-                      "it doesn't understand is listed - never guessed.", "Help")
-        words.setVisible(False)
-        more.toggled.connect(words.setVisible)
-        lay.addWidget(more)
-        lay.addWidget(words)
+        more.setText("More ▾")
+        more.setPopupMode(QToolButton.InstantPopup)
+        m = QMenu(more)
+        m.addAction("Fill template from narration", self.fill_template)
+        m.addAction("Fill scene-sheet template", lambda: self.fill_template(sheet=True))
+        m.addAction("Update plan from timeline", self.from_timeline)
+        if not big:
+            m.addAction("Open in a large window (F9)", lambda: self.win.open_plan_window())
+        more.setMenu(m)
+        if big:
+            for b in (b_imp, b_val, self.b_apply, more):
+                r.addWidget(b)
+        else:                                  # the side panel is narrow: two rows, nothing cut off
+            r1 = QHBoxLayout()
+            r1.addWidget(b_imp)
+            r1.addWidget(b_val)
+            r.addWidget(self.b_apply, 1)
+            r.addWidget(more)
+            r = (r1, r)
+        self.status = label("", "Help")
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.verticalHeader().setVisible(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
+                                   QAbstractItemView.AnyKeyPressed)
+        hh = self.table.horizontalHeader()
+        for c in range(len(self.COLS)):
+            hh.setSectionResizeMode(c, QHeaderView.Interactive)
+        hh.setSectionResizeMode(5, QHeaderView.Stretch)
+        self.table.setMinimumHeight(220 if not big else 160)
+        self.table.itemChanged.connect(self._cell_changed)
+        self.table.currentCellChanged.connect(lambda *_: self._show_details())
+        self.table.cellDoubleClicked.connect(self._row_double_clicked)
+        self.b_det = QToolButton()
+        self.b_det.setText("Scene details ▸")
+        self.b_det.setToolTip("Sound effects, B-roll, effects, text and transition for the selected scene")
+        self.b_det.setCheckable(True)
+        self.det = QWidget()
+        dl = QVBoxLayout(self.det)
+        dl.setContentsMargins(0, 0, 0, 0)
+        self.det_text = label("", "Help")
+        self.det_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.det_look = QLineEdit()
+        self.det_look.setPlaceholderText("Look for this scene, e.g.  crossfade, sfx whoosh.wav, show 006.mp4 as "
+                                         "b-roll, sepia, text \"Morocco, 1910\"")
+        self.det_look.editingFinished.connect(self._look_edited)
+        dl.addWidget(self.det_text)
+        dl.addWidget(self.det_look)
+        self.det.setVisible(False)
+        self.b_det.toggled.connect(lambda c: (self.det.setVisible(c), self.b_det.setText(
+            "Scene details " + ("▾" if c else "▸"))))
+        self.problems = QListWidget()
+        self.problems.setMaximumHeight(120)
+        self.problems.itemDoubleClicked.connect(self._goto)
+        top = QWidget()
+        tl = QVBoxLayout(top)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.addWidget(self.edit, 1)
+        for row_ in (r if isinstance(r, tuple) else (r,)):
+            tl.addLayout(row_)
+        bottom = QWidget()
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.addWidget(self.status)
+        bl.addWidget(self.table, 1)
+        bl.addWidget(self.b_det)
+        bl.addWidget(self.det)
+        bl.addWidget(self.problems)
+        sp = QSplitter(Qt.Vertical)
+        sp.setChildrenCollapsible(False)
+        sp.addWidget(top)
+        sp.addWidget(bottom)
+        lay.addWidget(sp, 1)
         win._bindings.append(self.load)
 
+    # ------------------------------------------------------------------ text <-> project
     def load(self):
         txt = self.win.project.get("timed_plan") or ""
         if self.edit.toPlainText() != txt and not self.edit.hasFocus():
             with QSignalBlocker(self.edit):
                 self.edit.setPlainText(txt)
-        if self.win.project["settings"].get("scene_mode") != "timed":
-            self.status.setText("Scene mode isn't 'My timed edit plan' - building the plan switches to it.")
-        elif self.status.text().startswith("Scene mode isn't"):
-            self.status.setText("")
+            self.validate(quiet=True)
 
     def save(self):
         txt = self.edit.toPlainText()
@@ -843,22 +899,33 @@ class TimedPlanBox(QWidget):
         if (p.get("timed_plan") or "") == txt:
             return
         p["timed_plan"] = txt
-        self.win.commit("Edit timed plan")
+        self.win.commit("Edit editing plan")
         self.win._load_plan_boxes()
 
-    def from_timeline(self):
-        from . import timedplan
-        p = self.win.project
-        if not p.get("scenes"):
-            return
-        if self.edit.toPlainText().strip():
-            r = QMessageBox.question(self, "Timed edit plan", "Replace the plan text with the current timeline "
-                                     "(as a scene sheet)?")
-            if r != QMessageBox.Yes:
+    def _set_text(self, txt, label_text):
+        with QSignalBlocker(self.edit):
+            self.edit.setPlainText(txt)
+        self.win.project["timed_plan"] = txt
+        self.win.commit(label_text)
+        self.win._load_plan_boxes()
+
+    def import_plan(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import editing plan", "",
+                                              "Plan (*.txt *.md *.csv *.tsv);;All files (*)")
+        if path:
+            self.import_file(path)
+
+    def import_file(self, path):
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            txt = f.read()
+        if path.lower().endswith(".tsv"):
+            txt = txt.replace("\t", ",")
+        if self.edit.toPlainText().strip() and self.edit.toPlainText() != txt:
+            if QMessageBox.question(self, "Import plan", f"Replace the current plan with {os.path.basename(path)}?"
+                                    ) != QMessageBox.Yes:
                 return
-        self.edit.setPlainText(timedplan.export_sheet(p))
-        self.save()
-        self.check()
+        self._set_text(txt, "Import editing plan")
+        self.validate()
 
     def fill_template(self, sheet=False):
         from . import timedplan
@@ -868,50 +935,184 @@ class TimedPlanBox(QWidget):
                                     "from your recording.")
             return
         if self.edit.toPlainText().strip():
-            r = QMessageBox.question(self, "Timed edit plan", "Replace the current plan with a fresh template?")
-            if r != QMessageBox.Yes:
+            if QMessageBox.question(self, "Editing plan", "Replace the current plan with a fresh template?"
+                                    ) != QMessageBox.Yes:
                 return
-        self.edit.setPlainText(timedplan.sheet_template(p["words"], p["duration"]) if sheet else
-                               timedplan.template(p["words"], p["duration"]))
-        self.save()
-        self.check()
+        self._set_text(timedplan.sheet_template(p["words"], p["duration"]) if sheet else
+                       timedplan.template(p["words"], p["duration"]), "Fill plan template")
+        self.validate()
 
-    def load_file(self):
+    def from_timeline(self):
         from . import timedplan
-        path, _ = QFileDialog.getOpenFileName(self, "Timed edit plan", "", "Plan (*.txt *.csv);;All files (*)")
-        if not path:
+        p = self.win.project
+        if not p.get("scenes"):
             return
-        if path.lower().endswith(".csv"):
-            txt = timedplan.from_csv(path)
-        else:
-            with open(path, encoding="utf-8-sig", errors="replace") as f:
-                txt = f.read()
-        self.edit.setPlainText(txt)
-        self.save()
-        self.check()
+        if self.edit.toPlainText().strip():
+            if QMessageBox.question(self, "Editing plan", "Replace the plan text with the current timeline "
+                                    "(as a scene sheet)?") != QMessageBox.Yes:
+                return
+        self._set_text(timedplan.export_sheet(p), "Update plan from timeline")
+        self.validate()
 
-    def check(self):
+    # ------------------------------------------------------------------ validate / review table
+    def _parse(self):
         from . import timedplan
         from .project import project_media
-        self.save()
         p = self.win.project
-        rows, probs = timedplan.parse_plan(p.get("timed_plan") or "", project_media(p), p.get("duration") or None,
-                                           int(p["settings"].get("fps", 30)), p.get("words"))
+        return timedplan.parse_entries(p.get("timed_plan") or "", project_media(p), p.get("duration") or None,
+                                       int(p["settings"].get("fps", 30)), p.get("words"))
+
+    def validate(self, quiet=False):
+        """Parse the plan and show every scene + every problem. Changes nothing. -> (rows, problems)"""
+        if not quiet:
+            self.save()
+        self.entries, rows, probs = self._parse()
+        self._fill_table()
         self.problems.clear()
-        errs = [x for x in probs if x["level"] == "error"]
         for x in probs:
             it = QListWidgetItem(("✖ " if x["level"] == "error" else "⚠ ") + x["msg"])
             it.setForeground(QColor("#FF5252" if x["level"] == "error" else "#FFB300"))
             it.setData(Qt.UserRole, x.get("line") or 0)
             self.problems.addItem(it)
+        p = self.win.project
+        errs = [x for x in probs if x["level"] == "error"]
         cover = sum(r["end"] - r["start"] for r in rows)
-        self.status.setText(f"{len(rows)} {'scene' if timedplan.is_sheet(p.get('timed_plan') or '') else 'shot'}(s), {cover:.1f} s of {float(p.get('duration') or 0):.1f} s covered. " +
-                            ("✓ Ready to build." if not errs else f"{len(errs)} problem(s) to fix first "
-                                                                  "(double-click one to jump to its line)."))
+        mode = "" if p["settings"].get("scene_mode") == "timed" else \
+            "  (Applying switches scene mode to 'My timed edit plan'.)"
+        if not (p.get("timed_plan") or "").strip():
+            self.status.setText("No plan yet - paste it above, or Import Plan." + mode)
+        else:
+            self.status.setText(f"{len(self.entries)} scene(s) found, {len(rows)} valid; {cover:.2f} s of "
+                                f"{float(p.get('duration') or 0):.2f} s covered. " +
+                                ("✓ Ready to apply." if not errs else
+                                 f"✖ {len(errs)} problem(s) - nothing can be applied until they're fixed "
+                                 "(double-click one to jump to its line).") + mode)
         return rows, probs
 
+    def check(self):                       # older name (tests, other windows)
+        return self.validate()
+
+    def _applied(self, e):
+        """Is this scene on the timeline exactly as planned (same picture, same frame-snapped times)?"""
+        from .instructions import snap
+        fps = int(self.win.project["settings"].get("fps", 30))
+        if not e.get("media") or e.get("start") is None:
+            return False
+        a, b = snap(e["start"], fps), snap(e["end"], fps)
+        return any(abs(s["start"] - a) < 1e-3 and abs(s["end"] - b) < 0.02 and
+                   os.path.normcase(s.get("media") or "") == os.path.normcase(e["media"])
+                   for s in self.win.project.get("scenes") or [])
+
+    def _fill_table(self):
+        from .timedplan import _f
+        self._filling = True
+        cur = self.table.currentRow()
+        self.table.setRowCount(len(self.entries))
+        for i, e in enumerate(self.entries):
+            a, b = e.get("start"), e.get("end")
+            vals = (e.get("ref") or "", _f(a) if a is not None else "", _f(b) if b is not None else "",
+                    f"{b - a:.2f}" if a is not None and b is not None else "", e.get("motion") or "",
+                    e.get("notes") or "")
+            for c, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if self.FIELDS[c] is None:
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                if c == 1 and a is not None:
+                    it.setToolTip(f"{a:.3f} s exactly")
+                if c == 2 and b is not None:
+                    it.setToolTip(f"{b:.3f} s exactly")
+                if c == 5 and v:
+                    it.setToolTip(v)
+                self.table.setItem(i, c, it)
+            if e.get("errors"):
+                st, col, tip = "✖ " + e["errors"][0].split(": ", 1)[-1], "#FF5252", "\n".join(e["errors"])
+            elif e.get("warnings"):
+                st, col, tip = f"⚠ {len(e['warnings'])} warning(s)", "#FFB300", "\n".join(e["warnings"])
+            elif self._applied(e):
+                st, col, tip = "✓ On the timeline", "#4CAF50", "This scene is on the timeline exactly as planned."
+            else:
+                st, col, tip = "✓ Valid - not applied yet", "#4FA3FF", "Press Apply to Timeline."
+            it = QTableWidgetItem(st)
+            it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+            it.setForeground(QColor(col))
+            it.setToolTip(tip)
+            self.table.setItem(i, 6, it)
+            self.table.setVerticalHeaderItem(i, QTableWidgetItem(str(e["scene"] if e.get("scene") is not None
+                                                                     else i + 1)))
+        self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(5, max(160, self.table.columnWidth(5) if self.table.columnWidth(5) < 320 else 320))
+        if 0 <= cur < len(self.entries):
+            self.table.setCurrentCell(cur, 0)
+        self._filling = False
+        self._show_details()
+
+    def _cell_changed(self, item):
+        if self._filling:
+            return
+        r, c = item.row(), item.column()
+        if not (0 <= r < len(self.entries)) or self.FIELDS[c] is None:
+            return
+        self._edit(r, self.FIELDS[c], item.text())
+
+    def _edit(self, r, field, value):
+        from . import timedplan
+        self.save()
+        old = self.win.project.get("timed_plan") or ""
+        new, msg = timedplan.edit_entry(old, self.entries, r, field, value)
+        if new != old:
+            self._set_text(new, f"Edit plan scene {r + 1}")
+        self.validate(quiet=True)
+        if msg:
+            self.status.setText(msg + "  " + self.status.text())
+        if 0 <= r < self.table.rowCount():
+            self.table.setCurrentCell(r, 0)
+
+    def _look_edited(self):
+        r = self.table.currentRow()
+        if 0 <= r < len(self.entries) and self.det_look.text().strip() != (self.entries[r].get("look") or ""):
+            self._edit(r, "look", self.det_look.text())
+
+    def _show_details(self):
+        r = self.table.currentRow()
+        if not (0 <= r < len(self.entries)):
+            self.det_text.setText("Select a scene in the table to see its details.")
+            self.det_look.setEnabled(False)
+            return
+        e = self.entries[r]
+        interp = [m for _c, m in (e.get("interp") or [])]
+        lines = [f"Plan line {e.get('src_line') or e['line']} ({ {'sheet': 'scene sheet', 'table': 'table row', 'csv': 'CSV row', 'lines': 'plan line'}.get(e.get('fmt'), e.get('fmt')) })"]
+        if e.get("start") is not None and e.get("end") is not None:
+            from .instructions import snap
+            fps = int(self.win.project["settings"].get("fps", 30))
+            lines.append(f"Time: {e['start']:.3f} - {e['end']:.3f} s ({e['end'] - e['start']:.3f} s); on the timeline "
+                         f"cuts land on whole frames: {snap(e['start'], fps):.3f} - {snap(e['end'], fps):.3f} s")
+        mo = [m for m in interp if m.startswith("motion")]
+        lines.append("Motion: " + ("; ".join(mo) if mo else (e.get("motion") or "project guidelines")))
+        for name, keys in DETAIL_GROUPS:
+            got = [m for m in interp if m.lower().startswith(keys)]
+            lines.append(f"{name}: " + ("; ".join(got) if got else "none"))
+        bad = [w for w in e.get("warnings") or [] if "not understood" in w]
+        if bad:
+            lines.append("NOT applied (not understood): " + "; ".join(w.split(": ", 1)[-1] for w in bad))
+        if e.get("notes"):
+            lines.append("Notes (kept, not applied): " + e["notes"])
+        for x in e.get("errors") or []:
+            lines.append("✖ " + x)
+        self.det_text.setText("\n".join(lines))
+        self.det_look.setEnabled(e.get("fmt") != "sheet")
+        self.det_look.setToolTip("" if e.get("fmt") != "sheet" else
+                                 "Scene sheets keep these in their own fields - edit them in the plan text")
+        with QSignalBlocker(self.det_look):
+            self.det_look.setText(e.get("look") or "")
+
+    def _row_double_clicked(self, r, c):
+        if self.FIELDS[c] is None and 0 <= r < len(self.entries):
+            self._goto_line(self.entries[r].get("src_line") or self.entries[r]["line"])
+
     def _goto(self, it):
-        n = int(it.data(Qt.UserRole) or 0)
+        self._goto_line(int(it.data(Qt.UserRole) or 0))
+
+    def _goto_line(self, n):
         if n <= 0:
             return
         from PySide6.QtGui import QTextCursor
@@ -921,29 +1122,38 @@ class TimedPlanBox(QWidget):
         self.edit.setTextCursor(c)
         self.edit.setFocus()
 
-    def build(self):
+    # ------------------------------------------------------------------ apply
+    def apply(self):
+        """Validate; if anything is wrong nothing changes. Otherwise build the timeline exactly from the plan."""
         from . import timedplan
-        rows, probs = self.check()
+        rows, probs = self.validate()
         p = self.win.project
         if not p.get("words"):
             QMessageBox.information(self, "AutoEditor", "Analyze the voiceover first.")
             return False
         if any(x["level"] == "error" for x in probs):
-            QMessageBox.warning(self, "Timed edit plan", "Fix these first - nothing was built:\n\n" +
+            QMessageBox.warning(self, "Editing plan", "Nothing was applied - fix these first:\n\n" +
                                 "\n".join(x["msg"] for x in probs if x["level"] == "error")[:2500])
             return False
         p["settings"]["scene_mode"] = "timed"
         try:
             timedplan.build(p, self.win.log)
         except ValueError as e:
-            QMessageBox.warning(self, "Timed edit plan", str(e)[:2500])
+            QMessageBox.warning(self, "Editing plan", str(e)[:2500])
             self.win.restore(self.win._last_state)
             return False
         self.win.sel = 0
-        self.win.commit("Build timeline from plan")
+        self.win.commit("Apply editing plan")
         self.win.refresh_all()
+        self.validate(quiet=True)
         rep = p.get("plan_report") or []
-        self.win.status_msg(rep[0] if rep else "Built.")
+        self.win.status_msg(rep[0] if rep else "Applied.")
         if hasattr(self.win, "open_instructions"):      # every scene: image, resolved times, settings - editable
             self.win.open_instructions()
         return True
+
+    def build(self):                       # older name (tests, other windows)
+        return self.apply()
+
+
+TimedPlanBox = EditingPlanPanel            # the old name, used by older code

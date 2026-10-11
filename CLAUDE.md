@@ -1,4 +1,4 @@
-# CLAUDE.md - AutoEditor (v7.3.1)
+# CLAUDE.md - AutoEditor (v7.4.0)
 
 Guide for Claude Code working in this repository. Read this first, then the code. The user-facing manual is
 `README.md`; this file is for the developer/agent.
@@ -65,6 +65,7 @@ ffprobe** dependency - `mediainfo.probe()` parses `ffmpeg -i` output.
 | test_instructions_gui | the Editing instructions window (F8) + guidelines |
 | test_timed_plan | timed edit plan: template, line errors, exact build, real export, window |
 | test_scene_sheet | SCENE-block sheet format, strict None defaults, GENERAL RULES export format, write-back |
+| test_editing_plan | one Editing plan panel; compact/Markdown/CSV/scene-block/notes → one schema (incl. the user's failing Markdown row `\| 23 \| 023.jpg \| 01:56.84 \| 02:06.76 \| 9.92 \|`); broken plan never falls back to file order; table edit → plan text; Apply changes the timeline AND exported frames |
 
 `tests.test_sfx` and `tools/make_sfx.py` also need `scipy` (not needed by the app itself). On a bare Linux
 box Qt needs system libraries such as `libegl1`, `libgl1`, `libxkbcommon0`, `libfontconfig1`.
@@ -100,7 +101,7 @@ anything - they only draw the timeline.
 |---|---|
 | `project.py` | project JSON: `new_project`, `load` (+migration), `save`, `analyze`, `replan`, `keep_ids`, `estimate_words` (flagged fallback when speech recognition fails), `project_media` |
 | `transcribe.py` | faster-whisper word timestamps; `apply_script` corrects spelling from the script |
-| `timedplan.py` | **Timed edit plan** (one line per shot `0:00 - 0:04 \| 001.png \| slow zoom in, crossfade`) and **scene sheet** (`SCENE 001` / `Image:` / `Start:` … blocks). `parse_plan` (dispatches to `parse_sheet`), `build`, `template`, `sheet_template`, `export_sheet`, `problems_for_export` |
+| `timedplan.py` | **Editing plan** (stored in `project["timed_plan"]`). `parse_entries` turns every format into one schema: compact lines (`0:00 - 0:04 \| 001.png \| slow zoom in, crossfade`), Markdown tables (header + separator rows, `COLUMNS` synonyms), CSV with a header, **scene sheets** (`SCENE 001` blocks → `parse_sheet`), and note lines (`- **065.jpg:** …`, `Scene 12: …`) attached as notes (never timing rows, never applied as edits). Start/end are authoritative; a duration is only checked. `parse_plan` (rows, problems), `edit_entry` / `plan_as_table` / `_sheet_set` (review-table edits → plan text), `build`, `template`, `sheet_template`, `export_sheet`, `problems_for_export` |
 | `instructions.py` | per-scene editing instructions: records, deterministic NL parser `parse()`, `resolve()` (words→times, names→files, choices for ambiguity), `apply()` (writes timeline; `placed=True` fast path), `place()` (carves the timeline, conflicts), `validate()` (fatal vs warning), JSON/CSV import/export, `lock_field`, `refresh_resolved` (narration changed), `flag_framing_review` (aspect changed) |
 | `planner.py` | smart planning: `sentences`, topic boundaries, TF-IDF matching `similarity_matrix/assign`, project/scene instruction phrase parsing, scene map CSV/JSON, `keep_locked`, `apply_guidelines` (transition default/frequency, no-shake, no-flash), `scene_warnings` |
 | `scenes.py` | classic splitting (pauses), motion levels `apply_motion_level`, `reassign_transitions`, `scene_text` |
@@ -120,7 +121,7 @@ anything - they only draw the timeline.
 | `guidelines.py` | style presets for project guidelines (`style_changes` preview, `apply_style`) |
 | `profiles.py` / `presets.py` | video categories; editing presets, caption styles, SFX levels, transitions |
 | `stock.py` / `stock_panel.py` | optional Pexels/Pixabay search (user keys in keyring) |
-| GUI | `app.py` (MainWindow, bindings, undo, actions), `app_parts_base.py`, `gui_widgets.py` (PlayerWidget, PreviewCanvas), `timeline.py`, `properties.py` (right panel incl. Framing tab), `gui_panels.py`, `media_bin.py`, `plan_panels.py` (Script, Instructions incl. TimedPlanBox + GuidelinesBox, Review), `instructions_panel.py` (F8 window), `cue_dialog.py`, `theme.py` |
+| GUI | `app.py` (MainWindow, bindings, undo, actions), `app_parts_base.py`, `gui_widgets.py` (PlayerWidget, PreviewCanvas), `timeline.py`, `properties.py` (right panel incl. Framing tab), `gui_panels.py`, `media_bin.py`, `plan_panels.py` (Script; Instructions = `EditingPlanPanel` (alias `TimedPlanBox`; text box, Import Plan / Validate / Apply to Timeline, review table Image\|Start\|End\|Duration\|Motion\|Notes\|Status, scene details) + collapsible GuidelinesBox and Smart-mode helpers; Review), `instructions_panel.py` (F8 window), `cue_dialog.py`, `theme.py` |
 
 ## 5. Data model (project JSON, `*.autoedit.json`)
 
@@ -166,9 +167,12 @@ Legacy `formats`, `quality` are kept only for migration.
 ## 6. Precedence & rules implemented
 1. Locked values (scene `locked` / `locked_fields`) › explicit scene instruction › project guidelines ›
    category preset › automatic. Two explicit visuals on one interval = conflict (nothing applied).
-2. Timed mode: the plan decides every cut and picture; without a valid plan you get a DRAFT (statuses
-   `fallback`) and export is **blocked** (`instructions.validate` fatal). Scene sheets are strict: an
-   unspecified field = None.
+2. Timed mode ("My editing plan (strict)"): the plan decides every cut and picture. With NO plan text you get
+   a DRAFT (statuses `fallback`) for preview; a plan that FAILS is never replaced by pictures in file order -
+   `project.replan` leaves the timeline unchanged and lists the problems. Export is **blocked** either way
+   (`instructions.validate` fatal). Scene sheets are strict: an unspecified field = None. There is ONE plan box
+   (Instructions → Editing plan; F9 opens the same panel large) - no start-page copy, and the Directions box is
+   only shown in 'Follow my directions' mode.
 3. Narration changed (new words) → `refresh_resolved` re-anchors, flags moved/locked scenes "needs review".
 4. Export blocks on: missing explicitly requested files, gaps/overlaps, invalid clip ranges, unsupported
    effects, invalid timed plan. Warnings (unapplied/unresolved, short clips…) appear in the quality gate.
@@ -218,10 +222,12 @@ Instructions/Review, framing modes, single-aspect export, verified exports, fast
 v7.1 per-scene Editing instructions (F8), guidelines, JSON/CSV import · v7.2 required Timed edit plan (F9) ·
 v7.3 scene-sheet format, editable per-scene summaries, write-back, film-convention pans ·
 v7.3.1 bug-fix release from a code review (no new features; regression checks in test_core
-`check_review_fixes*` and test_gui_state `check_review_fixes`).
+`check_review_fixes*` and test_gui_state `check_review_fixes`) · v7.4 one Editing plan panel (Markdown/CSV/notes,
+review table, strict apply without file-order fallback).
 
 ## 10. Typical user workflow (what to keep working)
-Start page: voiceover, images folder, script, video shape, category, mode "My timed edit plan" → Open the
-editor (auto-Analyze) → Instructions tab → Timed edit plan (or F9) → *Fill scene-sheet template* → fill
-`Image:` + settings → *Check plan* → *Build timeline from plan* → Editing instructions (F8) opens: verify/adjust
-each scene → Review scenes (Ctrl+Shift+R) / Quality check (F7) → Export (Ctrl+E) → one verified MP4.
+Start page: voiceover, images folder, script, video shape, category, mode "My editing plan (strict)" → Open the
+editor (auto-Analyze) → Instructions tab → Editing plan (or F9): paste / *Import Plan* (or *More → Fill
+template*) → *Validate* → check the table (fix cells or text) → *Apply to Timeline* → Editing instructions (F8)
+opens: verify/adjust each scene → Review scenes (Ctrl+Shift+R) / Quality check (F7) → Export (Ctrl+E) → one
+verified MP4.

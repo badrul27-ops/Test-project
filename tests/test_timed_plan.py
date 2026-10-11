@@ -56,7 +56,7 @@ def main():
     rows, probs = TP.parse_plan(bad, media, dur)
     msgs = " | ".join(x["msg"] for x in probs)
     for want in ("line 3 starts at 0:08.00 but line 2 runs until 0:09.00", "099.png is missing",
-                 "line 5 (0:20.00-0:24.00): choose an image", "line 6: needs a time range",
+                 "line 5 (0:20.00-0:24.00): choose an image", "line 6: not a scene row or a note - NOT used",
                  "line 7: ends (0:22.00) before", "the narration continues until"):
         assert want in msgs, (want, msgs)
     p["timed_plan"] = bad
@@ -151,12 +151,12 @@ def main():
     txt = "\n".join(out_lines) + "\n"
     box.edit.setPlainText(txt)
     box.save()
-    assert w.home_plan.toPlainText() == txt                  # start-page box shows the same plan
+    assert not hasattr(w, "home_plan") and not hasattr(w.instr_panel, "scene")   # ONE plan box, no duplicates
     assert box.build()
     got = [os.path.basename(s["media"]) for s in w.project["scenes"]]
     assert got == [os.path.basename(imgs[k % 6]) for k in range(n)], got
     assert os.sep + "alt" + os.sep in w.project["scenes"][2]["media"]
-    assert "✓ Ready to build" in box.status.text()
+    assert "✓ Ready to apply" in box.status.text()
     w.do_undo()
     assert w.project["scenes"][0]["id"] != "T001"
     w.do_redo()
@@ -166,7 +166,7 @@ def main():
     assert w.plan_win.box.edit.toPlainText() == w.project["timed_plan"]
     w.plan_win.box.edit.setPlainText(w.project["timed_plan"] + "# note\n")
     w.plan_win.box.save()
-    assert box.edit.toPlainText().endswith("# note\n") and w.home_plan.toPlainText().endswith("# note\n")
+    assert box.edit.toPlainText().endswith("# note\n")
     if os.environ.get("AE_SHOTS"):
         w.plan_win.grab().save(os.path.join(os.environ["AE_SHOTS"], "timed_plan_big.png"))
         os.makedirs(os.environ["AE_SHOTS"], exist_ok=True)
@@ -174,7 +174,7 @@ def main():
         app.processEvents()
         w.grab().save(os.path.join(os.environ["AE_SHOTS"], "timed_plan.png"))
     print(f"  window: 'Fill template' → {n} lines with ???; Build refused until every image is chosen; then built "
-          "exactly (undo/redo work); the start page shows the same plan")
+          "exactly (undo/redo work); one plan box (F9 window shows the same plan)")
     print("TIMED PLAN OK")
 
 

@@ -1,4 +1,4 @@
-# AutoEditor v7.3.1
+# AutoEditor v7.4
 
 Automatic video editor for Windows. Everything runs on your own PC, and there's no subscription or API cost.
 
@@ -20,6 +20,36 @@ The first time you press *Analyze*, the speech model downloads once. The "small"
 ## Upgrading from an older version
 
 Unzip v6 **over** your existing AutoEditor folder and replace the files when Windows asks. Keep the `venv` folder, so you don't need to run setup again. Then start it with `run.bat` as before.
+
+## New in v7.4: one Editing plan
+
+**One place for your plan.** The Instructions tab now has a single **Editing plan** panel. The extra boxes that
+could overwrite each other are gone: the plan box on the start page, the separate "Scene instructions" box, and
+the "Plan scenes" button (that one picked pictures in file order). The narration script stays in the Script tab.
+
+**Paste it the way you have it.** All of these work, and they can be mixed:
+- lines like `01:56.84 - 02:06.76 | 023.jpg | slow zoom in`
+- Markdown tables, e.g. `| 23 | 023.jpg | 01:56.84 | 02:06.76 | 9.92 |` - the header row and the `|---|` row are
+  recognised; extra columns (Motion, Transition, SFX, B-roll, Effects, Text, Notes…) are used
+- CSV with a header row (image, start, end, …)
+- SCENE blocks (scene sheets)
+- notes such as `- **065.jpg:** Moved before 064…` or `Scene 12: keep the map visible` - they are attached to that
+  image's scene and shown in the Notes column. Notes are **kept, not applied** as editing instructions.
+
+Start and End decide the timing. If you also give a Duration, it is only checked (a mismatch is listed).
+
+**Buttons:** *Import Plan…*, *Validate* (changes nothing), *Apply to Timeline*. *More* has the templates,
+"Update plan from timeline" and the large window (F9).
+
+**Review table:** Image | Start | End | Duration | Motion | Notes | Status - one row per scene, including broken
+ones. You can edit Image, Start, End, Motion and Notes right in the table; the plan text is updated (other
+formats are rewritten once as one table - nothing is dropped, Ctrl+Z undoes). The timeline only changes when you
+press *Apply to Timeline*. *Scene details* shows the sound effects, B-roll, effects, text and transition of the
+selected scene, and anything that was NOT understood.
+
+**Strict:** if the plan has a problem (a missing image, a gap, an overlap, an unreadable time), nothing is applied
+and every problem is listed. AutoEditor no longer falls back to putting pictures in file order. Cuts land on whole
+frames, so 116.84 s becomes 116.833 s at 30 fps (the details panel shows both).
 
 ## New in v7.3.1: bug fixes
 

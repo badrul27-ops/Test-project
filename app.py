@@ -48,7 +48,7 @@ from autoedit.scenes import reassign_transitions, scene_text
 from autoedit.theme import WheelGuard, apply_theme
 from autoedit.util import APP_DIR, AUDIO_EXT, IMAGE_EXT, VIDEO_EXT, fmt_time, folder_report, is_video, list_media
 
-SCENE_MODES = [("My timed edit plan - exact seconds per image (required)", "timed"),
+SCENE_MODES = [("My editing plan (strict) - exact images and seconds", "timed"),
                ("Smart - script topics + image descriptions", "smart"),
                ("Auto - split at pauses", "auto"), ("One scene per media file", "match_media"),
                ("Follow my directions (scene list / [1] markers)", "script_cues"),
@@ -401,7 +401,7 @@ class MainWindow(QMainWindow):
                            "Transcribe the voiceover and build the scene plan")
         self.a_replan = A("Re-plan scenes", self.replan, "Shift+F5",
                           "Rebuild scenes from the transcript with the current settings (keeps transcript)")
-        self.a_plan = A("Timed edit plan…", self.open_plan_window, "F9",
+        self.a_plan = A("Editing plan…", self.open_plan_window, "F9",
                         "Which image from which second to which second - required before export")
         self.a_instr = A("Editing instructions…", self.open_instructions, "F8",
                          "Scene-by-scene: visual, timing, motion, B-roll, sound effects, effects, transitions, locks")
@@ -644,6 +644,12 @@ class MainWindow(QMainWindow):
         f.addRow("", self.repeat_cb)
         f.addRow("Directions - your scene list", self.dir_box)
         f.addRow("", b_dir)
+
+        def directions_rows(f=f, b_dir=b_dir):     # only for 'Follow my directions' - never next to a plan
+            on = self.project["settings"].get("scene_mode") == "script_cues"
+            f.setRowVisible(self.dir_box, on)
+            f.setRowVisible(b_dir, on)
+        self._bindings.append(directions_rows)
         f.addRow("Automatic motion", self.motion_level)
         f.addRow("", self.motion_help)
         f.addRow("", b_ml)
@@ -1111,22 +1117,9 @@ class MainWindow(QMainWindow):
         f.addRow("", self.home_cat_info)
         self.home_mode = QComboBox()
         self.bind_combo(self.home_mode, "scene_mode", "Scene mode", SCENE_MODES, effects=("controls",))
-        self.home_dir = self._directions_box(110)
         f.addRow("4. How images follow the narration", self.home_mode)
-        f.addRow("Directions (optional) - your scene list", self.home_dir)
-        self.home_plan = QPlainTextEdit()
-        self.home_plan.setPlaceholderText("Timed edit plan (required) - one line per shot:\n"
-                                          "0:00 - 0:04.5 | 001.png | slow zoom in, crossfade\n"
-                                          "0:04.5 - 0:09 | 002.png | pan right\n\n"
-                                          "Don't know the seconds yet? Leave this empty, open the editor, then "
-                                          "Instructions tab → 'Fill template from narration'.")
-        self.home_plan.setMinimumHeight(110)
-        self._hp_t = QTimer(self)
-        self._hp_t.setSingleShot(True)
-        self._hp_t.setInterval(800)
-        self._hp_t.timeout.connect(self._save_home_plan)
-        self.home_plan.textChanged.connect(self._hp_t.start)
-        f.addRow("5. Timed edit plan (required) - which image from which second", self.home_plan)
+        f.addRow("5. Editing plan", label("Paste or import it in the editor: Instructions tab → Editing plan "
+                                          "(one place for the whole plan).", "Help"))
         self._bindings.append(self._load_plan_boxes)
         l1.addLayout(f)
         self.home_analyze = QCheckBox("Analyze the voiceover as soon as the editor opens")
@@ -1195,20 +1188,8 @@ class MainWindow(QMainWindow):
         self.load_controls()
         self._directions_info()
 
-    def _save_home_plan(self):
-        txt = self.home_plan.toPlainText()
-        if (self.project.get("timed_plan") or "") == txt:
-            return
-        self.project["timed_plan"] = txt
-        self.commit("Edit timed plan")
-        if hasattr(self, "instr_panel"):
-            self.instr_panel.timed.load()
-
     def _load_plan_boxes(self):
-        txt = self.project.get("timed_plan") or ""
-        if hasattr(self, "home_plan") and self.home_plan.toPlainText() != txt and not self.home_plan.hasFocus():
-            with QSignalBlocker(self.home_plan):
-                self.home_plan.setPlainText(txt)
+        """The editing plan is shown in the Instructions tab (and the F9 window) - keep both in step."""
         if hasattr(self, "instr_panel"):
             self.instr_panel.timed.load()
         if getattr(self, "plan_win", None) is not None:
@@ -1219,7 +1200,7 @@ class MainWindow(QMainWindow):
         from autoedit.plan_panels import TimedPlanBox
         if getattr(self, "plan_win", None) is None:
             d = QDialog(self)
-            d.setWindowTitle("Timed edit plan - AutoEditor")
+            d.setWindowTitle("Editing plan - AutoEditor")
             d.setModal(False)
             lay = QVBoxLayout(d)
             d.box = TimedPlanBox(self, big=True)
@@ -1241,13 +1222,16 @@ class MainWindow(QMainWindow):
 
     def _load_directions(self):
         txt = self.project.get("directions") or ""
-        for ed in (getattr(self, "home_dir", None), getattr(self, "dir_box", None),
-                   getattr(getattr(self, "instr_panel", None), "scene", None)):
+        for ed in (getattr(self, "dir_box", None),):
             if ed is not None and ed.toPlainText() != txt and not ed.hasFocus():
                 with QSignalBlocker(ed):
                     ed.setPlainText(txt)
 
     def apply_directions(self):
+        if self.project["settings"].get("scene_mode") == "timed":
+            self.status_msg("Your editing plan decides the scenes (scene mode 'My editing plan'), so directions "
+                            "would replace it - NOT applied. Change the scene mode first if you want directions.")
+            return
         self._save_directions(self.dir_box)
         if not (self.project.get("directions") or "").strip():
             self.status_msg("Type or paste your scene list in the Directions box first.")
@@ -1298,8 +1282,6 @@ class MainWindow(QMainWindow):
         return self.stack.currentWidget() is self.split_v
 
     def home_continue(self):
-        self._save_directions(self.home_dir)
-        self._save_home_plan()
         self.show_editor()
         if self.project["settings"].get("scene_mode") == "timed":
             self.tools.setCurrentIndex([b.text() for b in self.tools.buttons].index("Instructions"))
