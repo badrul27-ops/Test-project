@@ -310,6 +310,9 @@ class MainWindow(QMainWindow):
             row.load(self.project.get(key, "") if top else self.project["settings"].get(key, ""))
 
         def changed():
+            if key == "media_dir" and top and not self._replace_media_set(row.text()):
+                row.load(self.project.get(key, ""))           # cancelled: keep the old folder
+                return
             self._set(key, row.text(), label_text, effects, top=top)
             self.load_controls()          # keep the twin field (setup screen / editor) in step
             self.update_input_info()
@@ -1424,6 +1427,59 @@ class MainWindow(QMainWindow):
         self.show_home()
         self.status_msg("Project cleared - no files on your PC were deleted.")
 
+    def _old_media(self, new_dir):
+        """What would be left over from the current picture set if the images folder became new_dir:
+        (separately added files not inside new_dir, scenes whose picture isn't available any more)."""
+        p = self.project
+        root = os.path.normcase(os.path.abspath(new_dir)).rstrip(os.sep) + os.sep if new_dir else None
+
+        def inside(x):
+            return bool(root) and os.path.normcase(os.path.abspath(x)).startswith(root)
+        extras = [x for x in p.get("extra_media") or [] if not inside(x)]
+        keep = {os.path.normcase(os.path.abspath(m)) for m in list_media(new_dir)} if new_dir else set()
+        scenes = [s for s in p.get("scenes") or [] if s.get("media") and
+                  os.path.normcase(os.path.abspath(s["media"])) not in keep]
+        return extras, scenes
+
+    def _replace_media_set(self, new_dir):
+        """Choosing (or clearing) the images folder REPLACES the pictures: the bin and the timeline must not
+        keep showing images from before. Asks once; files on the PC are never touched. -> False if cancelled."""
+        p = self.project
+        extras, scenes = self._old_media(new_dir)
+        if not extras and not scenes:
+            p["excluded_media"] = []
+            return True
+        what = []
+        if extras:
+            what.append(f"{len(extras)} image(s)/clip(s) added earlier from other places (removed from the media bin)")
+        if scenes:
+            what.append(f"{len(scenes)} scene(s) still showing a picture that isn't in "
+                        + ("the new folder" if new_dir else "the project any more")
+                        + " (left without a picture - their timing is kept)")
+        title = "Change images folder" if new_dir else "Remove images folder"
+        r = QMessageBox.question(
+            self, title, ("Use only the images from the new folder?" if new_dir else
+                          "Remove the images folder and all images from this project?") +
+            "\n\nThis also clears:\n• " + "\n• ".join(what) +
+            "\n\nNo files on your PC are deleted. You can undo this (Ctrl+Z)." +
+            ("\n\nNo = switch folders but keep the old pictures." if new_dir else ""),
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
+        if r == QMessageBox.Cancel:
+            return False
+        if r == QMessageBox.Yes:
+            gone = {os.path.normcase(os.path.abspath(x)) for x in extras}
+            p["extra_media"] = [x for x in p.get("extra_media") or [] if os.path.normcase(os.path.abspath(x))
+                                not in gone]
+            p["excluded_media"] = []
+            for sc in scenes:
+                sc["media"] = ""
+                sc["status"], sc["why"] = "missing", "picture removed with the old images folder"
+            loader().cancel_pending()
+            self.status_msg("Old pictures cleared from the media bin and the timeline - no files were deleted.")
+        elif not new_dir:
+            return False                   # 'No' only makes sense when switching folders
+        return True
+
     def clear_input(self, key):
         """x button next to an input. Explains what depends on it, never deletes files."""
         p = self.project
@@ -1442,19 +1498,8 @@ class MainWindow(QMainWindow):
                 return
             p.update(words=[], duration=0.0, scenes=[], sfx_events=[], sfx_planned=False)
             self.sel = -1
-        if key == "media_dir":
-            folder = os.path.normcase(os.path.abspath(cur))
-            using = [s for s in p.get("scenes", []) if s.get("media") and
-                     os.path.normcase(os.path.abspath(s["media"])).startswith(folder.rstrip(os.sep) + os.sep)]
-            if using:
-                if QMessageBox.question(
-                        self, "Remove images folder",
-                        f"{len(using)} scenes show images from '{name}'. They'll be left without a visual "
-                        "(their timing is kept) until you choose a new folder and re-plan, or replace "
-                        "visuals one by one.\n\nNo files are deleted. You can undo this.") != QMessageBox.Yes:
-                    return
-                for s in using:
-                    s["media"] = ""
+        if key == "media_dir" and not self._replace_media_set(""):
+            return
         if top:
             p[key] = ""
         else:

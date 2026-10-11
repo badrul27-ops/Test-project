@@ -1,4 +1,4 @@
-# AutoEditor v7.5
+# AutoEditor v7.5.1
 
 Automatic video editor for Windows. Everything runs on your own PC, and there's no subscription or API cost.
 
@@ -20,6 +20,14 @@ The first time you press *Analyze*, the speech model downloads once. The "small"
 ## Upgrading from an older version
 
 Unzip v6 **over** your existing AutoEditor folder and replace the files when Windows asks. Keep the `venv` folder, so you don't need to run setup again. Then start it with `run.bat` as before.
+
+## New in v7.5.1: changing the images folder really replaces the images
+
+Before, choosing a new images folder (or clearing it with ×) left old pictures behind: images you had added
+separately (+ Files, dragging a folder in) stayed in the media bin, and scenes kept showing pictures from the old
+folder. Now AutoEditor asks once - **Yes** clears the old pictures from the media bin and the timeline (those
+scenes keep their timing, without a picture, until you apply your plan again), **No** switches folders but keeps
+them, **Cancel** keeps the old folder. Nothing on your PC is deleted, and Ctrl+Z brings everything back.
 
 ## New in v7.5: simpler workflow, exact cuts, every plan format
 

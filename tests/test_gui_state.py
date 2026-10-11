@@ -509,6 +509,27 @@ def check_review_fixes(app, w):
     assert p2["settings"]["caption_size"] == 130
     assert p2["settings"]["project_instructions"] == "" and p2["settings"]["continuity"] == ""
     QSettings().remove("defaults/settings")
+    # choosing another images folder replaces the pictures: no old images left in the bin or on the timeline
+    from PIL import Image as _Im
+    old_q = QMessageBox.question
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+    new_dir, other = os.path.join(tempfile.mkdtemp(), "new_imgs"), os.path.join(tempfile.mkdtemp(), "other_imgs")
+    for d in (new_dir, other):
+        os.makedirs(d)
+        _Im.new("RGB", (64, 36), (0, 90, 0)).save(os.path.join(d, os.path.basename(d) + "_1.png"))
+    w.import_media([other])                                    # added separately (not from the folder)
+    old_pic = w.project["scenes"][0]["media"]
+    w.media.load(new_dir)
+    w.media.changed.emit()
+    bin_now = [w.bin.list.item(i).text() for i in range(w.bin.list.count())]
+    assert bin_now == ["new_imgs_1.png"], bin_now
+    assert not w.project["extra_media"] and all(not s.get("media") for s in w.project["scenes"])
+    w.do_undo()                                                # one undo step brings everything back
+    assert w.project["scenes"][0]["media"] == old_pic and len(w.project["extra_media"]) == 1
+    w.media.clear_requested.emit()                             # x: the whole picture set goes
+    assert not w.bin.list.count() or all(w.bin.list.item(i).text() == "" for i in range(w.bin.list.count()))
+    assert all(not s.get("media") for s in w.project["scenes"]) and os.path.isfile(old_pic)
+    QMessageBox.question = old_q
     print("  reorder/split keep clip settings and ids, locks respected, selection follows the clip, "
           "CC track follows caption size, defaults skip per-video text")
 

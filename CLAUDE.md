@@ -1,4 +1,4 @@
-# CLAUDE.md - AutoEditor (v7.5.0)
+# CLAUDE.md - AutoEditor (v7.5.1)
 
 Guide for Claude Code working in this repository. Read this first, then the code. The user-facing manual is
 `README.md`; this file is for the developer/agent.
@@ -226,7 +226,9 @@ v7.3 scene-sheet format, editable per-scene summaries, write-back, film-conventi
 v7.3.1 bug-fix release from a code review (no new features; regression checks in test_core
 `check_review_fixes*` and test_gui_state `check_review_fixes`) · v7.4 one Editing plan panel (Markdown/CSV/notes,
 review table, strict apply without file-order fallback) · v7.5 main tabs Media / Editing Plan / Export (+More),
-Strict/Assisted plan, JSON + key=value + guidelines in plans, None = off, exact-frame cuts, diagnostic plan.
+Strict/Assisted plan, JSON + key=value + guidelines in plans, None = off, exact-frame cuts, diagnostic plan ·
+v7.5.1 changing/clearing the images folder replaces the picture set (`MainWindow._replace_media_set`: extra_media
+from elsewhere + scenes whose picture isn't in the new folder, one confirm, one undo step).
 
 ## 10. Typical user workflow (what to keep working)
 Start page: voiceover, images folder, script, video shape (More options: category, mode "Strict plan") → Create
