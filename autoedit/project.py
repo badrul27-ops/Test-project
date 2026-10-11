@@ -65,6 +65,7 @@ DEFAULT_SETTINGS = {
     "transition_default": "auto", "transition_seconds": None, "transition_frequency": "every_cut",
     "sfx_mode": "auto", "duck_ratio": 6.0, "duck_release": 350.0, "caption_margin": None,
     "continuity": "", "restrict_no_shake": False, "restrict_no_flash": False,
+    "plan_roots": {},           # editing-plan folder name → real folder (Map folder…), for this project only
 }
 
 

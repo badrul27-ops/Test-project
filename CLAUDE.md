@@ -1,4 +1,4 @@
-# CLAUDE.md - AutoEditor (v7.5.2)
+# CLAUDE.md - AutoEditor (v7.6.0)
 
 Guide for Claude Code working in this repository. Read this first, then the code. The user-facing manual is
 `README.md`; this file is for the developer/agent.
@@ -65,6 +65,7 @@ ffprobe** dependency - `mediainfo.probe()` parses `ffmpeg -i` output.
 | test_instructions_gui | the Editing instructions window (F8) + guidelines |
 | test_timed_plan | timed edit plan: template, line errors, exact build, real export, window |
 | test_scene_sheet | SCENE-block sheet format, strict None defaults, GENERAL RULES export format, write-back |
+| test_plan_assets | the user's 96-row `Numbered_Images/NNN.jpg` plan (`tests/fixtures/plan96_numbered_images.txt`) on the ZIP layout (001-096 at the root + Character_References/004.jpg): full path tokens, Windows/space/paren/quote tokens, duplicates kept, reference pictures never picked by name, Map folder, problem kinds, no false gap, 96 scenes in order with shared frame-exact cuts, last scene to 635.611429 s, broken plan keeps timeline, save/reload, preview colours, window (summary, banner, Choose image in place) |
 | test_editing_plan | one Editing plan panel; compact/key=value/Markdown/CSV/JSON/scene-block/notes/guidelines → one schema (incl. the user's failing Markdown row `\| 23 \| 023.jpg \| 01:56.84 \| 02:06.76 \| 9.92 \|`); explicit None = off; templates parse; broken plan never falls back to file order; strict 3-scene plan: last/first frame at every cut correct in PREVIEW and EXPORT; revision + diagnostic plan; save/reload/replan stable; table edit → plan text; Apply changes the timeline AND exported frames |
 
 `tests.test_sfx` and `tools/make_sfx.py` also need `scipy` (not needed by the app itself). On a bare Linux
@@ -231,7 +232,13 @@ v7.5.1 changing/clearing the images folder replaces the picture set (`MainWindow
 from elsewhere + scenes whose picture isn't in the new folder, one confirm, one undo step) · v7.5.2
 `MainWindow.update_plan_banner` (red banner when the timeline doesn't follow the plan; cached), problems above the
 review table, `_resolve_image` uses a single clearly-meant file (other extension / spaces / same number) WITH a
-warning, else "did you mean" suggestions.
+warning, else "did you mean" suggestions · v7.6 asset references keep the whole path (`ASSET_REF`, `_clean_ref`);
+`_resolve_image(…, ctx=plan_context(project))`: exact → images-folder relative → `settings.plan_roots` mapping
+(Map folder…) → unique sub-path → unique SCENE picture by name (`REF_DIR` folders excluded; summarised once);
+problems carry a `kind` (timing/no_asset/not_found/ambiguous/unmapped/gap/overlap); picture-less rows still count
+as covered; strict `parse_time`; fenced ``` timed block extraction; description tables → notes; `build` verifies
+every scene's picture/time and restores the previous timeline otherwise; `AUTOEDIT_DEBUG=1` logs each row's
+token → file.
 
 ## 10. Typical user workflow (what to keep working)
 Start page: voiceover, images folder, script, video shape (More options: category, mode "Strict plan") → Create

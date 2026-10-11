@@ -46,8 +46,23 @@ SHORTHAND = [
 ]
 
 
+TIME_FULL = re.compile(r"^\s*(?:(\d+):)?(?:(\d{1,2}):)?(\d+)(?:[.,](\d+))?\s*$")
+
+
 def parse_time(s):
-    return C.parse_time((s or "").replace(",", "."))
+    """'116.84', '1:56.84', '01:56.840', '0:01:56.84' -> seconds. '.24' and '.240' are both 240 ms (decimal
+    seconds, never frames). Malformed values (seconds/minutes of 60 or more after a colon) -> None."""
+    t = (s or "").strip()
+    m = TIME_FULL.match(t)
+    if not m:
+        return None
+    h_, m_, s_, frac = m.groups()
+    if h_ is not None and m_ is None:          # m:ss
+        h_, m_ = None, h_
+    if (m_ is not None and int(s_) >= 60) or (h_ is not None and int(m_) >= 60):
+        return None
+    v = int(s_) + (int(m_) * 60 if m_ else 0) + (int(h_) * 3600 if h_ else 0) + (float("0." + frac) if frac else 0.0)
+    return round(v, 6)
 
 
 def _split_extras(text):
@@ -94,72 +109,160 @@ def _phrase(x):
     return x
 
 
-def _resolve_image(ref, media, index, n, problems, what="line", src_line=None):
-    """Exact file for a reference, or None (with the reason in problems). Never guesses between files.
-    n names the shot/scene in messages; src_line is the text line to jump to (default: n)."""
+ASSET_EXT = r"(?:png|jpe?g|webp|gif|bmp|tiff?|mp4|mov|mkv|webm|m4v|avi)"
+# an image/clip reference on a plan line: a name or a path (folders, spaces, parentheses, a drive letter), maybe in
+# quotes or backticks; anything after a comma is the look
+ASSET_REF = re.compile(r"^[`\"'“]?(?P<ref>(?:[A-Za-z]:[\\/])?[^,|`\"“”]*?\." + ASSET_EXT + r")[`\"'”]?"
+                       r"(?=\s*(?:,|$))\s*,?\s*(?P<rest>.*)$", re.I)
+ASSET_TOKEN = re.compile(r"(?:[A-Za-z]:[\\/])?[^|`\"“”]*?\." + ASSET_EXT, re.I)
+# folders holding character / style reference pictures: never picked for a scene by file name alone
+REF_DIR = re.compile(r"(?:^|[\s_\-.])(?:char(?:acter)?s?[\s_\-]*)?ref(?:erence)?s?(?:$|[\s_\-.])", re.I)
+
+
+def _clean_ref(t):
+    """Surrounding spaces, quotes, backticks or **bold** off - never characters inside the name."""
+    t = (t or "").strip()
+    while t.startswith("**") and t.endswith("**") and len(t) > 4:
+        t = t[2:-2].strip()
+    if len(t) >= 2 and ((t[0] == t[-1] and t[0] in "`\"'") or (t[0] == "“" and t[-1] == "”")):
+        t = t[1:-1].strip()
+    return t
+
+
+def _pkey(path):
+    """Lookup key for a path: one separator style, no '..' tricks, case-insensitive like Windows."""
+    import posixpath
+    return posixpath.normpath((path or "").replace("\\", "/")).lower()
+
+
+def _is_reference(path, root):
+    """Is this picture inside a reference folder (Character_References, refs, …) of the images folder?"""
+    rel = os.path.relpath(path, root) if root and os.path.isabs(path) and os.path.isabs(root) else path
+    try:
+        parts = rel.replace("\\", "/").split("/")[:-1]
+    except ValueError:
+        parts = []
+    return any(REF_DIR.search(x) for x in parts if x not in ("..", "."))
+
+
+def plan_context(project):
+    """What the resolver needs from the project: the images folder and folder mappings chosen for this plan."""
+    return {"root": project.get("media_dir") or "", "roots": dict(project["settings"].get("plan_roots") or {})}
+
+
+def _resolve_image(ref, media, index, n, problems, what="line", src_line=None, ctx=None):
+    """Exact file for a reference, or None (with the reason in problems, each with a 'kind'). Never guesses
+    between files. Order: exact path → path inside the images folder → a folder mapping you chose → the same
+    sub-path anywhere in the project's images → the only scene picture with that name (reference folders are
+    never used this way; the chosen file is reported). n names the shot/scene in messages; src_line is the text
+    line to jump to (default: n)."""
+    ctx = ctx if ctx is not None else {}
     where = f"{what} {n}"
     ln = src_line or n
-    base = os.path.basename(ref.replace("\\", "/")).lower()
+
+    def fail(kind, msg, level="error"):
+        problems.append({"line": ln, "level": level, "kind": kind, "msg": f"{where}: {msg}"})
+        return None
+    ref = _clean_ref(ref)
+    rs = ref.replace("\\", "/")
+    root = ctx.get("root") or ""
+    keys = ctx.get("_keys")
+    if keys is None or ctx.get("_keys_for") is not media:
+        keys = {}
+        for m in media:
+            keys.setdefault(_pkey(m), m)
+        ctx["_keys"], ctx["_keys_for"] = keys, media
+
+    def scene_only(ms):
+        return [m for m in ms if not _is_reference(m, root)]
+    if "/" in rs or re.match(r"^[A-Za-z]:", rs):
+        if os.path.isabs(ref) or re.match(r"^[A-Za-z]:/", rs):
+            m = keys.get(_pkey(rs))
+            if m:
+                return m
+        if root:
+            m = keys.get(_pkey(os.path.join(root, rs)))
+            if m:
+                return m
+        for pre in sorted(ctx.get("roots") or {}, key=len, reverse=True):
+            pk = pre.replace("\\", "/").strip("/").lower()
+            if rs.lower().startswith(pk + "/"):
+                target = os.path.join(ctx["roots"][pre], rs[len(pk) + 1:])
+                m = keys.get(_pkey(target))
+                if m:
+                    return m
+                return fail("not_found", f"{rs} isn't in the folder you chose for “{pre}” ({ctx['roots'][pre]})")
+        tail = "/" + _pkey(rs).lstrip("/")
+        hits = [m for k_, m in keys.items() if k_.endswith(tail)]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            return fail("ambiguous", f"{rs} matches {len(hits)} files ({', '.join(hits[:3])}) - choose one")
+        base = os.path.basename(rs).lower()
+        same = [m for m in media if os.path.basename(m).lower() == base]
+        scene = scene_only(same)
+        if len(scene) == 1:
+            folder = os.path.dirname(rs)
+            ctx.setdefault("prefix_fallback", {}).setdefault(folder, []).append((ln, rs, scene[0]))
+            return scene[0]
+        if len(scene) > 1:
+            return fail("ambiguous", f"{rs}: there is no folder “{os.path.dirname(rs)}”, and {len(scene)} scene "
+                                     f"pictures are named {os.path.basename(rs)} - choose one, or map the folder")
+        if same:
+            return fail("not_found", f"{rs}: the only picture with this name is in a reference folder "
+                                     f"({same[0]}) - write that path if you really want it")
+        return fail("unmapped", f"{rs} can't be found - there is no folder “{os.path.dirname(rs)}” in your images "
+                                "folder and no picture with this name. Use “Map folder…” to choose where these "
+                                "images are")
+    base = os.path.basename(rs).lower()
     same = [m for m in media if os.path.basename(m).lower() == base] if "." in base else []
     if len(same) > 1:
-        want = ref.replace("\\", "/").lower()
-        pick = [m for m in same if m.replace("\\", "/").lower().endswith("/" + want)] if "/" in want else []
-        if len(pick) != 1:
-            folders = ", ".join(sorted({os.path.basename(os.path.dirname(m)) for m in same}))
-            problems.append({"line": ln, "level": "error",
-                             "msg": f"{where}: {len(same)} files are named {os.path.basename(ref)} (in {folders}) - "
-                                    f"write the folder too, e.g. {os.path.basename(os.path.dirname(same[-1]))}/"
-                                    f"{os.path.basename(ref)}"})
-            return None
-        return pick[0]
+        scene = scene_only(same)
+        if len(scene) == 1:
+            ctx["ref_skipped"] = ctx.get("ref_skipped", 0) + 1
+            return scene[0]
+        folders = ", ".join(sorted({os.path.basename(os.path.dirname(m)) or "." for m in same}))
+        return fail("ambiguous", f"{len(same)} files are named {os.path.basename(ref)} (in {folders}) - write the "
+                                 f"folder too, e.g. {os.path.basename(os.path.dirname(same[-1]))}/"
+                                 f"{os.path.basename(ref)}, or choose one")
     if "." in base:                            # a file name: exact, or one clearly-meant file (always reported)
         stem = os.path.splitext(base)[0]
         norm = re.sub(r"\s+", "", base)
         num = int(re.sub(r"\D", "", stem)) if re.fullmatch(r"\D*\d+\D*", stem) else None
         if not same:
-            close = [m for m in media if os.path.splitext(os.path.basename(m))[0].lower() == stem]
+            pool = scene_only(media)
+            close = [m for m in pool if os.path.splitext(os.path.basename(m))[0].lower() == stem]
             how = "a different file type"
             if not close:
-                close = [m for m in media if re.sub(r"\s+", "", os.path.basename(m).lower()) == norm]
+                close = [m for m in pool if re.sub(r"\s+", "", os.path.basename(m).lower()) == norm]
                 how = "extra spaces in the name"
             if not close and num is not None:
-                close = [m for m in media if os.path.splitext(os.path.basename(m))[0].isdigit()
+                close = [m for m in pool if os.path.splitext(os.path.basename(m))[0].isdigit()
                          and int(os.path.splitext(os.path.basename(m))[0]) == num]
                 how = "the same number written differently"
             if len(close) == 1:
-                problems.append({"line": ln, "level": "warning",
-                                 "msg": f"{where}: the plan says {os.path.basename(ref)} but the folder has "
-                                        f"{os.path.basename(close[0])} ({how}) - that file is used"})
+                fail("close", f"the plan says {os.path.basename(ref)} but the folder has "
+                              f"{os.path.basename(close[0])} ({how}) - that file is used", level="warning")
                 return close[0]
             if len(close) > 1:
-                problems.append({"line": ln, "level": "error",
-                                 "msg": f"{where}: {os.path.basename(ref)} isn't in the folder, and "
-                                        f"{len(close)} files could be meant ("
-                                        f"{', '.join(os.path.basename(m) for m in close[:4])}) - write the exact "
-                                        "file name"})
-                return None
+                return fail("ambiguous", f"{os.path.basename(ref)} isn't in the folder, and {len(close)} files could "
+                                         f"be meant ({', '.join(os.path.basename(m) for m in close[:4])}) - write "
+                                         "the exact file name")
             import difflib
             names = [os.path.basename(m) for m in media]
             near = difflib.get_close_matches(os.path.basename(ref), names, n=3, cutoff=0.6)
-            problems.append({"line": ln, "level": "error",
-                             "msg": f"{where}: {os.path.basename(ref)} isn't in the images folder"
-                                    + (f" - did you mean {' or '.join(near)}?" if near else
-                                       " - check the name, or add the file to the folder")})
-            return None
+            return fail("not_found", f"{os.path.basename(ref)} isn't in the images folder"
+                                     + (f" - did you mean {' or '.join(near)}?" if near else
+                                        " - check the name, or add the file to the folder"))
+        return same[0]
     paths, bad = C.resolve(ref, media, index)
     if any("files have this number" in b_ for b_ in bad):
-        problems.append({"line": ln, "level": "error",
-                         "msg": f"{where}: " + next(b_ for b_ in bad if "files have this number" in b_)
-                                .split(" - used")[0] + " - write the file name instead"})
-        return None
+        return fail("ambiguous", next(b_ for b_ in bad if "files have this number" in b_).split(" - used")[0]
+                    + " - write the file name instead")
     if not paths:
-        problems.append({"line": ln, "level": "error",
-                         "msg": f"{where}: {ref} is missing - it isn't in the images folder. Select a replacement."})
-        return None
+        return fail("not_found", f"{ref} isn't in the images folder - check the name or number")
     if len(paths) > 1:
-        problems.append({"line": ln, "level": "error",
-                         "msg": f"{where}: '{ref}' means {len(paths)} files - give one file name"})
-        return None
+        return fail("ambiguous", f"'{ref}' means {len(paths)} files - give one file name")
     for b_ in bad:
         problems.append({"line": ln, "level": "warning", "msg": f"{where}: {b_}"})
     return paths[0]
@@ -173,25 +276,25 @@ def _coverage(rows, duration, problems, what="line"):
     rows.sort(key=lambda r: r["start"])
     for x, y in zip(rows, rows[1:]):
         if y["start"] < x["end"] - 1e-6:
-            problems.append({"line": y.get("src_line") or y["line"], "level": "error",
+            problems.append({"line": y.get("src_line") or y["line"], "level": "error", "kind": "overlap",
                              "msg": f"{_lab(y)} starts at {_f(y['start'])} but {_lab(x)} runs until "
                                     f"{_f(x['end'])} - shots can't overlap"})
         elif y["start"] > x["end"] + 1e-6:
-            problems.append({"line": y.get("src_line") or y["line"], "level": "error",
+            problems.append({"line": y.get("src_line") or y["line"], "level": "error", "kind": "gap",
                              "msg": f"nothing is assigned from {_f(x['end'])} to {_f(y['start'])} (between {_lab(x)} "
                                     f"and {_lab(y)})"})
     if rows and rows[0]["start"] > 1e-6:
-        problems.append({"line": rows[0].get("src_line") or rows[0]["line"], "level": "error",
+        problems.append({"line": rows[0].get("src_line") or rows[0]["line"], "level": "error", "kind": "gap",
                          "msg": f"nothing is assigned from 0:00 to {_f(rows[0]['start'])} - the first shot must start "
                                 "at 0:00"})
     if rows and duration:
         end = rows[-1]["end"]
         if end < duration - 0.5:
-            problems.append({"line": rows[-1].get("src_line") or rows[-1]["line"], "level": "error",
+            problems.append({"line": rows[-1].get("src_line") or rows[-1]["line"], "level": "error", "kind": "gap",
                              "msg": f"the narration continues until {_f(duration)} but the plan ends at {_f(end)} - "
                                     "add shots for the rest"})
         elif end > duration + 0.5:
-            problems.append({"line": rows[-1].get("src_line") or rows[-1]["line"], "level": "error",
+            problems.append({"line": rows[-1].get("src_line") or rows[-1]["line"], "level": "error", "kind": "overlap",
                              "msg": f"the plan runs until {_f(end)} but the narration ends at {_f(duration)} - the "
                                     "narration is never extended; shorten the last shot"})
 
@@ -333,7 +436,7 @@ def _split_motion(extras):
     return ", ".join(mo), ", ".join(rest)
 
 
-def parse_entries(text, media, duration=None, fps=30, words=None):
+def parse_entries(text, media, duration=None, fps=30, words=None, ctx=None):
     """Every format -> one scene-plan schema. Returns (entries, rows, problems):
       entries: one per scene line the plan tries to define (also the broken ones, for review) -
                {line, scene, start, end, duration, ref, media, motion, look, notes, errors[], warnings[], fmt}
@@ -342,8 +445,9 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
     Formats: compact lines (start - end | image | look), Markdown tables, CSV with a header row, scene sheets
     (SCENE 001 blocks). Note lines ('- **065.jpg:** …', 'Scene 12: …') are attached to their scenes as notes -
     never read as timing rows. Nothing is silently dropped: every other line is listed."""
+    ctx = dict(ctx or {})
     if is_sheet(text):
-        rows, problems = parse_sheet(text, media, duration, fps, words)
+        rows, problems = parse_sheet(text, media, duration, fps, words, ctx=ctx)
         entries = [dict(r, scene=r["line"], duration=r["end"] - r["start"], motion="", look="",
                         errors=[], warnings=[p["msg"] for p in problems if p.get("line") and p["level"] == "warning"
                                              and str(r["label"]) in p["msg"]], fmt="sheet",
@@ -356,15 +460,16 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
     entries, problems, notes, prose = [], [], [], []
     header, csv_header = None, None
 
-    def err(e, msg):
+    def err(e, msg, kind="timing"):
         e["errors"].append(msg)
-        problems.append({"line": e["line"], "level": "error", "msg": msg})
+        e.setdefault("kind", kind)
+        problems.append({"line": e["line"], "level": "error", "kind": kind, "msg": msg})
 
     def fill(e, keys, cells, where, extra_notes):
         """Named cells (table / CSV / JSON) -> the entry. Empty cell = follow the guidelines; None = off."""
         look = []
         for k, c in zip(keys, cells):
-            c = _unmd(c) if k != "notes" else c.strip()
+            c = c.strip() if k in ("notes", "image") else _unmd(c)
             if not c:
                 continue
             if k == "scene":
@@ -372,7 +477,7 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
                 e["scene"] = int(dg.group(0)) if dg else None
                 e["scene_id"] = c
             elif k == "image":
-                e["ref"] = c
+                e["ref"] = _clean_ref(c)
             elif k in ("start", "end"):
                 e[k] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
                 if e[k] is None:
@@ -453,7 +558,30 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
             problems.append({"line": 0, "level": "warning", "msg": f"JSON field(s) {', '.join(unknown)} not understood "
                              "- their values are kept as notes, NOT applied"})
 
-    for n, raw in enumerate((text or "").splitlines() if not is_json else [], 1):
+    all_lines = (text or "").splitlines() if not is_json else []
+    use = None                                 # a guide with ONE ``` block of timed lines: use only that block
+    fences = [i for i, ln_ in enumerate(all_lines, 1) if ln_.strip().startswith("```")]
+    blocks = [(fences[i], fences[i + 1]) for i in range(0, len(fences) - 1, 2)]
+    timed_blocks = [(a, b) for a, b in blocks
+                    if sum(1 for ln_ in all_lines[a:b - 1] if RANGE.match(ln_.strip())) >= 2]
+    if len(timed_blocks) > 1:
+        problems.append({"line": timed_blocks[1][0], "level": "error", "kind": "timing",
+                         "msg": f"this document has {len(timed_blocks)} separate timed lists (in ``` blocks at lines "
+                                + ", ".join(f"{a + 1}-{b - 1}" for a, b in timed_blocks)
+                                + ") - keep only the one you want; nothing is applied"})
+        return [], [], problems
+    if timed_blocks:
+        a, b = timed_blocks[0]
+        use = set(range(a + 1, b))
+        outside = sum(1 for i, ln_ in enumerate(all_lines, 1) if i not in use and ln_.strip()
+                      and not ln_.strip().startswith("```"))
+        if outside:
+            problems.append({"line": a + 1, "level": "warning", "kind": "info",
+                             "msg": f"using the timed list in the ``` block (lines {a + 1}-{b - 1}); the other "
+                                    f"{outside} line(s) of the document are NOT used"})
+    for n, raw in enumerate(all_lines, 1):
+        if use is not None and n not in use:
+            continue
         if GUIDE_HEAD.match(raw) or TITLE_LINE.match(raw):
             guide_mode = True                  # full-video guidelines follow (until the first scene)
             continue
@@ -470,11 +598,13 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
             rest = m.group("rest").strip()
             parts = [x.strip() for x in rest.split("|")] if "|" in rest else None
             if parts is not None:
-                ref, extras = parts[0], ", ".join(x for x in parts[1:] if x)
+                ref, extras = _clean_ref(parts[0]), ", ".join(x for x in parts[1:] if x)
             else:
-                mm = re.match(r"^(?:image|img|picture|photo|clip|file)?\s*#?\s*(" + I.FILE_RE +
-                              r"|\d+|\?+)\s*,?\s*(.*)$", rest, re.I)
-                ref, extras = (mm.group(1), mm.group(2)) if mm else ("", rest)
+                ma = ASSET_REF.match(rest)
+                mm = None if ma else re.match(r"^(?:image|img|picture|photo|clip|file)?\s*#?\s*(\d+|\?+)\s*,?\s*(.*)$",
+                                              rest, re.I)
+                ref, extras = ((ma.group("ref"), ma.group("rest")) if ma else
+                               (mm.group(1), mm.group(2)) if mm else ("", rest))
             e["ref"] = ref
             plain, mo, look, nts = [], [], [], []
             for x in _split_extras(extras):
@@ -517,15 +647,24 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
         if cells is not None:
             keys = header if e["fmt"] == "table" else csv_header
             extra_notes = []
+            if keys and not any(k in ("start", "end", "time") for k in keys):
+                ci = keys.index("image") if "image" in keys else None
+                ref_ = _clean_ref(cells[ci]) if ci is not None and ci < len(cells) else ""
+                txt_ = " · ".join(_unmd(c) for k, c in zip(keys, cells) if k != "image" and c.strip())
+                if ref_ and txt_:              # a table that describes images (no times): notes, not scenes
+                    notes.append((n, os.path.basename(ref_.replace("\\", "/")), None, txt_))
+                elif ref_ or txt_:
+                    prose.append((n, line))
+                continue
             if keys:
                 fill(e, keys, cells, f"line {n}", extra_notes)
             else:                                   # table row with no header: find the image and the times
                 plain = [_unmd(c) for c in cells]
-                im = next((i for i, c in enumerate(plain) if re.fullmatch(I.FILE_RE, c, re.I)), None)
+                im = next((i for i, c in enumerate(cells) if ASSET_TOKEN.fullmatch(_clean_ref(c))), None)
                 if im is None:
                     prose.append((n, line))
                     continue
-                e["ref"] = plain[im]
+                e["ref"] = _clean_ref(cells[im])
                 for c in plain[:im]:
                     if c.isdigit() and e["scene"] is None:
                         e["scene"] = int(c)
@@ -582,13 +721,22 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
         ref = re.sub(r"^(?:image|img|picture|photo|clip|file)\s*#?\s*", "", e["ref"].strip(), flags=re.I)
         e["ref"] = ref
         if not ref or set(ref) <= {"?"}:
-            err(e, f"{lab} ({_f(e['start'])}-{_f(e['end'])}): choose an image")
+            err(e, f"{lab} ({_f(e['start'])}-{_f(e['end'])}): no image on this line - add its file name, e.g. "
+                   f"'{_f(e['start'])} - {_f(e['end'])} | 004.jpg'" if ref == "" else
+                   f"{lab} ({_f(e['start'])}-{_f(e['end'])}): choose an image", kind="no_asset")
             continue
         before = len(problems)
-        e["media"] = _resolve_image(ref, media, index, n, problems)
+        e["media"] = _resolve_image(ref, media, index, n, problems, ctx=ctx)
         for pr in problems[before:]:
             pr["msg"] = pr["msg"].replace(f"line {n}:", f"{lab}:", 1)
-            (e["errors"] if pr["level"] == "error" else e["warnings"]).append(pr["msg"])
+            if pr["level"] == "error":
+                e["errors"].append(pr["msg"])
+                e.setdefault("kind", pr.get("kind", "not_found"))
+            else:
+                e["warnings"].append(pr["msg"])
+        if e["media"] and os.path.basename(e["media"]).lower() != os.path.basename(ref.replace("\\", "/")).lower() \
+                or e["media"] and ("/" in ref or "\\" in ref):
+            e["resolved_note"] = e["media"]
     rows = []
     for k, e in enumerate(entries):
         if e["errors"] or not e["media"]:
@@ -636,7 +784,30 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
     fmt, guide = _guidelines(guide_lines, problems) if guide_lines else ({}, {})
     for r in rows:
         r["project"], r["guide"] = fmt, guide
-    _coverage(rows, duration, problems)
+    for folder, used in (ctx.get("prefix_fallback") or {}).items():
+        ex_ln, ex_ref, ex_path = used[0]
+        problems.append({"line": ex_ln, "level": "warning", "kind": "mapped",
+                         "msg": f"“{folder}/” isn't a folder inside your images folder - {len(used)} row(s) use the "
+                                f"scene picture with the same file name instead (e.g. {ex_ref} → {ex_path}). "
+                                "Reference folders are never used this way. To choose the folder yourself: Map "
+                                "folder…"})
+    if ctx.get("ref_skipped"):
+        problems.append({"line": 0, "level": "warning", "kind": "mapped",
+                         "msg": f"{ctx['ref_skipped']} row(s): a picture with the same name in a reference folder "
+                                "(e.g. Character_References) was ignored - the scene picture is used"})
+    order = [e for e in entries if e.get("start") is not None and not e.get("errors")]
+    late = next((b for a, b in zip(order, order[1:]) if b["start"] < a["start"] - 1e-6), None)
+    if late is not None:
+        problems.append({"line": late["line"], "level": "warning", "kind": "order",
+                         "msg": f"{late['label']} starts earlier than the row above it - scenes play by their times, "
+                                "not by row order"})
+    covered = rows + [{"line": e["line"], "label": e["label"], "start": I.snap(e["start"], fps),
+                       "end": I.snap(e["end"], fps)}
+                      for e in entries if e.get("errors") and e.get("kind") in
+                      ("no_asset", "not_found", "ambiguous", "unmapped") and e.get("start") is not None
+                      and e.get("end") is not None and e["end"] > e["start"]]
+    _coverage(covered, duration, problems)
+    rows.sort(key=lambda r: r["start"])
     # look phrases: every phrase must be understood (listed otherwise, never silently ignored)
     for r in rows:
         if not r["extras"]:
@@ -745,6 +916,16 @@ def edit_entry(text, entries, idx, field, value):
         else:
             text = _sheet_set(text, bl, "image" if field == "image" else field, value)
         return text, ""
+    if e.get("fmt") == "lines" and field == "image" and e.get("ref"):
+        lines = (text or "").splitlines()       # a plain plan line: change just the picture, in place
+        i = e["line"] - 1
+        if 0 <= i < len(lines) and e["ref"] in lines[i]:
+            head, sep, tail = lines[i].partition("|")
+            if sep and e["ref"] in tail:
+                lines[i] = head + sep + tail.replace(e["ref"], value, 1)
+            else:
+                lines[i] = lines[i].replace(e["ref"], value, 1)
+            return "\n".join(lines) + "\n", ""
     e = dict(e)
     if field in ("start", "end"):
         e[field] = t
@@ -761,9 +942,9 @@ def edit_entry(text, entries, idx, field, value):
                                       "(nothing else was changed; Ctrl+Z undoes).")
 
 
-def parse_plan(text, media, duration=None, fps=30, words=None):
+def parse_plan(text, media, duration=None, fps=30, words=None, ctx=None):
     """-> (rows, problems). Nothing is changed. See parse_entries for the formats."""
-    _entries, rows, problems = parse_entries(text, media, duration, fps, words)
+    _entries, rows, problems = parse_entries(text, media, duration, fps, words, ctx=ctx)
     return rows, problems
 
 
@@ -833,7 +1014,8 @@ def build(project, log=print):
     st = project["settings"]
     words, dur = project.get("words") or [], float(project.get("duration") or 0)
     fps = int(st.get("fps", 30))
-    rows, problems = parse_plan(project.get("timed_plan") or "", project_media(project), dur, fps, words)
+    rows, problems = parse_plan(project.get("timed_plan") or "", project_media(project), dur, fps, words,
+                                ctx=plan_context(project))
     errors = [p for p in problems if p["level"] == "error"]
     if errors:
         raise ValueError(f"The timed edit plan has {len(errors)} problem(s) - nothing was built:\n" +
@@ -845,8 +1027,12 @@ def build(project, log=print):
             st[k_] = v
     if fmt_changes:
         fps = int(st.get("fps", 30))
-        rows, problems = parse_plan(project.get("timed_plan") or "", project_media(project), dur, fps, words)
+        rows, problems = parse_plan(project.get("timed_plan") or "", project_media(project), dur, fps, words,
+                                    ctx=plan_context(project))
+    end_gap = dur - rows[-1].get("end_raw", rows[-1]["end"])
     rows[-1]["end"] = dur                       # within 0.5 s: the last shot ends with the narration
+    keep_state = {k: copy.deepcopy(project.get(k)) for k in ("scenes", "broll", "sfx_events", "overlays",
+                                                              "edit_instructions", "plan_report")}
     preset = dict(PRESETS.get(st.get("preset"), PRESETS["Documentary"]))
     # previous plan-built records are replaced; your own Editing-instruction records for other scenes stay
     recs = I.records(project)
@@ -911,7 +1097,20 @@ def build(project, log=print):
             failed.append(f"{_lab(r)}: NOT fully applied - {msg}")
     by_sid = {r["sid"]: r for r in rows}
     for s in project["scenes"]:                # the plan decides the picture: nothing replaces it
-        s["media"] = by_sid[s["id"]]["media"]
+        s["media"] = os.path.normpath(by_sid[s["id"]]["media"])       # the same form a manual choice stores
+    # every planned scene must now be on the timeline with ITS picture and times - otherwise undo everything
+    got = {s["id"]: s for s in project["scenes"]}
+    bad = [r for r in rows if r["sid"] not in got
+           or os.path.normcase(got[r["sid"]]["media"]) != os.path.normcase(os.path.normpath(r["media"]))
+           or abs(got[r["sid"]]["start"] - r["start"]) > 1e-3]
+    if bad:
+        for k_, v_ in keep_state.items():
+            project[k_] = v_
+        raise ValueError(f"{len(bad)} scene(s) could not be put on the timeline as planned (first: {_lab(bad[0])}) - "
+                         "nothing was changed")
+    if os.environ.get("AUTOEDIT_DEBUG"):
+        for r in rows:
+            log(f"[plan] {_lab(r)}: “{r['ref']}” → {r['media']} @ {r['start']:.3f}-{r['end']:.3f}")
     used = {os.path.normcase(r["media"]) for r in rows}
     unused = [m for m in project_media(project) if os.path.normcase(m) not in used]
     sheet = rows[0].get("settings") is not None
@@ -920,6 +1119,9 @@ def build(project, log=print):
                                     f"; {n_look} with their own look, the rest follow the project guidelines.")]
     if fmt_changes:
         rep.append("Export format from the plan's guidelines: " + "; ".join(fmt_changes))
+    if abs(end_gap) > 1e-6:
+        rep.append(f"The plan's last time is {rows[-1].get('end_raw', dur):.3f} s and the narration lasts {dur:.6f} s "
+                   f"({end_gap * 1000:+.1f} ms): the last scene runs to the end of the narration.")
     if guide:
         rep.append("Guidelines from the plan (scenes without their own setting): " +
                    ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in guide.items()))
@@ -941,7 +1143,7 @@ def problems_for_export(project):
     from .project import project_media
     st = project["settings"]
     rows, probs = parse_plan(project.get("timed_plan") or "", project_media(project),
-                             float(project.get("duration") or 0), int(st.get("fps", 30)))
+                             float(project.get("duration") or 0), int(st.get("fps", 30)), ctx=plan_context(project))
     out = [{"level": "fatal", "scene": None, "key": "timed_plan", "msg": "Timed edit plan: " + p["msg"]}
            for p in probs if p["level"] == "error"]
     if not out:
@@ -1006,7 +1208,7 @@ def _range(v):
     return parse_time(m.group(1)), parse_time(m.group(2))
 
 
-def parse_sheet(text, media, duration=None, fps=30, words=None):
+def parse_sheet(text, media, duration=None, fps=30, words=None, ctx=None):
     """SCENE 001 / Image: 001.png / Start: 00:00.000 / End: … blocks -> rows with structured settings.
     Every field is either applied or reported - never silently ignored. Placeholders like
     "[Paste the exact narration sentence]" count as not filled in."""
@@ -1059,7 +1261,7 @@ def parse_sheet(text, media, duration=None, fps=30, words=None):
         if _empty(img):
             problems.append({"line": ln, "level": "error", "msg": f"{lab}: no image given"})
             continue
-        path = _resolve_image(img.strip(), media, index, b["num"], problems, what="SCENE", src_line=ln)
+        path = _resolve_image(img.strip(), media, index, b["num"], problems, what="SCENE", src_line=ln, ctx=ctx)
         a_ln, a_v = get("start")
         e_ln, e_v = get("end")
         a, e = parse_time(a_v) if not _empty(a_v) else None, parse_time(e_v) if not _empty(e_v) else None

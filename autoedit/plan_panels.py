@@ -778,7 +778,7 @@ class EditingPlanPanel(QWidget):
         super().__init__()
         from PySide6.QtGui import QFontDatabase
         from PySide6.QtWidgets import QLineEdit, QMenu, QSplitter
-        self.win, self.entries, self._filling = win, [], False
+        self.win, self.entries, self._filling, self._probs = win, [], False, []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         if big:
@@ -849,7 +849,7 @@ class EditingPlanPanel(QWidget):
         from .media_bin import loader
         loader().updated.connect(self._refresh_icons)
         self.table.itemChanged.connect(self._cell_changed)
-        self.table.currentCellChanged.connect(lambda *_: self._show_details())
+        self.table.currentCellChanged.connect(lambda *_: (self._show_details(), self._update_fix_buttons()))
         self.table.cellDoubleClicked.connect(self._row_double_clicked)
         self.b_det = QToolButton()
         self.b_det.setText("Scene details ▸")
@@ -875,6 +875,19 @@ class EditingPlanPanel(QWidget):
         self.det.setVisible(False)
         self.b_det.toggled.connect(lambda c: (self.det.setVisible(c), self.b_det.setText(
             "Scene details " + ("▾" if c else "▸"))))
+        self.b_map = QPushButton("Map folder…")
+        self.b_map.setToolTip("Your plan names a folder (e.g. Numbered_Images/) that isn't inside the images folder: "
+                              "choose the folder those pictures are in - once, for every row of this project")
+        self.b_map.clicked.connect(self.map_folder)
+        self.b_choose = QPushButton("Choose image…")
+        self.b_choose.setToolTip("Pick the picture for the selected scene (writes its file name into the plan)")
+        self.b_choose.clicked.connect(self.choose_image)
+        self.fix_row = QHBoxLayout()
+        self.fix_row.addWidget(self.b_map)
+        self.fix_row.addWidget(self.b_choose)
+        self.fix_row.addStretch(1)
+        self.b_map.setVisible(False)
+        self.b_choose.setVisible(False)
         self.problems = QListWidget()
         self.problems.setMaximumHeight(120)
         self.problems.setWordWrap(True)
@@ -889,6 +902,7 @@ class EditingPlanPanel(QWidget):
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(0, 0, 0, 0)
         bl.addWidget(self.status)
+        bl.addLayout(self.fix_row)
         bl.addWidget(self.problems)            # problems first: they decide whether anything can be applied
         bl.addWidget(self.table, 1)
         bl.addWidget(self.b_det)
@@ -1004,13 +1018,15 @@ class EditingPlanPanel(QWidget):
         from .project import project_media
         p = self.win.project
         return timedplan.parse_entries(p.get("timed_plan") or "", project_media(p), p.get("duration") or None,
-                                       int(p["settings"].get("fps", 30)), p.get("words"))
+                                       int(p["settings"].get("fps", 30)), p.get("words"),
+                                       ctx=timedplan.plan_context(p))
 
     def validate(self, quiet=False):
         """Parse the plan and show every scene + every problem. Changes nothing. -> (rows, problems)"""
         if not quiet:
             self.save()
         self.entries, rows, probs = self._parse()
+        self._probs = probs
         self._fill_table()
         self.problems.clear()
         for x in probs:
@@ -1031,13 +1047,125 @@ class EditingPlanPanel(QWidget):
         if not (p.get("timed_plan") or "").strip():
             self.status.setText("No plan yet - paste it above, or Import Plan." + mode)
         else:
-            self.status.setText(f"{len(self.entries)} scene(s) found, {len(rows)} valid; {cover:.2f} s of "
-                                f"{float(p.get('duration') or 0):.2f} s covered. " +
-                                ("✓ Ready to apply." if not errs else
-                                 f"✖ {len(errs)} problem(s) - nothing was applied, so the timeline still shows the "
-                                 "PREVIOUS version. Fix the red lines below (double-click one to jump to it), then "
-                                 "Apply to Timeline.") + mode)
+            self.status.setText(self.summary(rows, probs, cover) + mode)
+        self._update_fix_buttons(probs)
         return rows, probs
+
+    KIND_TEXT = (("timing", "row(s) with times that can't be read"), ("no_asset", "row(s) without an image"),
+                 ("unmapped", "image path(s) that can't be found in your images folder - use Map folder…"),
+                 ("not_found", "image(s) not in the images folder"),
+                 ("ambiguous", "name(s) that fit several files - choose one"),
+                 ("gap", "gap(s) in the timing"), ("overlap", "overlap(s) in the timing"))
+
+    def summary(self, rows, probs, cover=None):
+        """One compact line: rows, images assigned, coverage, and problems grouped by what is wrong."""
+        from collections import Counter
+        p = self.win.project
+        n = len(self.entries)
+        assigned = sum(1 for e in self.entries if e.get("media") and not e.get("errors"))
+        cover = sum(r["end"] - r["start"] for r in rows) if cover is None else cover
+        kinds = Counter(e.get("kind", "timing") for e in self.entries if e.get("errors"))
+        for x in probs:                        # timing gaps/overlaps belong to no single row
+            if x["level"] == "error" and x.get("kind") in ("gap", "overlap"):
+                kinds[x["kind"]] += 1
+        head = (f"{n} timed row(s); {assigned} image(s) assigned; {cover:.2f} s of "
+                f"{float(p.get('duration') or 0):.2f} s covered. ")
+        if not any(x["level"] == "error" for x in probs):
+            return head + "✓ Ready to apply."
+        parts = [f"{kinds[k]} {t}" for k, t in self.KIND_TEXT if kinds.get(k)]
+        other = sum(1 for x in probs if x["level"] == "error") - sum(kinds.values())
+        if other > 0:
+            parts.append(f"{other} other problem(s)")
+        return (head + "✖ " + "; ".join(parts) + ". Nothing was applied - the timeline still shows the PREVIOUS "
+                "version. Details are in the list below (double-click one to jump to its line).")
+
+    def _plan_folder(self):
+        """The folder name most rows of the plan use (e.g. 'Numbered_Images'), or ''."""
+        from collections import Counter
+        c = Counter(os.path.dirname(e["ref"].replace("\\", "/")) for e in self.entries
+                    if e.get("ref") and ("/" in e["ref"] or "\\" in e["ref"]))
+        return c.most_common(1)[0][0] if c else ""
+
+    def _update_fix_buttons(self, probs=None):
+        probs = self._probs if probs is None else probs
+        folder = self._plan_folder()
+        roots = self.win.project["settings"].get("plan_roots") or {}
+        need = folder and (folder in roots or any(e.get("kind") in ("unmapped", "not_found", "ambiguous")
+                                                  for e in self.entries if e.get("errors"))
+                           or any(x.get("kind") == "mapped" for x in probs))
+        self.b_map.setVisible(bool(need))
+        self.b_map.setText(f"Map folder “{folder}”…" + (f" (now: {os.path.basename(roots[folder])})"
+                                                         if folder in roots else ""))
+        r = self.table.currentRow()
+        bad = 0 <= r < len(self.entries) and self.entries[r].get("kind") in ("no_asset", "not_found", "ambiguous",
+                                                                            "unmapped")
+        self.b_choose.setVisible(bool(bad))
+
+    def map_folder(self):
+        """One folder for every row that names the plan's folder - stored in this project (undoable)."""
+        folder = self._plan_folder()
+        if not folder:
+            return
+        st = self.win.project["settings"]
+        start = (st.get("plan_roots") or {}).get(folder) or self.win.project.get("media_dir") or ""
+        path = QFileDialog.getExistingDirectory(self, f"Which folder holds the “{folder}” images?", start)
+        if not path:
+            return
+        self.set_folder_mapping(folder, path)
+
+    def set_folder_mapping(self, folder, path):
+        st = self.win.project["settings"]
+        st["plan_roots"] = dict(st.get("plan_roots") or {}, **{folder: os.path.normpath(path)})
+        self.win.commit(f"Map plan folder {folder}")
+        self.validate(quiet=True)
+
+    def candidates(self, r):
+        """Pictures that could be meant for row r: same file name first, else every scene picture."""
+        from .project import project_media
+        from .timedplan import _is_reference
+        p = self.win.project
+        media = project_media(p)
+        e = self.entries[r]
+        base = os.path.basename((e.get("ref") or "").replace("\\", "/")).lower()
+        same = [m for m in media if os.path.basename(m).lower() == base]
+        return same or [m for m in media if not _is_reference(m, p.get("media_dir") or "")]
+
+    def choose_image(self):
+        """Compact picker (thumbnail + path) for the selected scene; the choice is written into the plan."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        from .media_bin import loader
+        r = self.table.currentRow()
+        if not (0 <= r < len(self.entries)):
+            return
+        root = self.win.project.get("media_dir") or ""
+        d = QDialog(self)
+        d.setWindowTitle(f"Choose the picture for {self.entries[r].get('label') or 'this scene'}")
+        lay = QVBoxLayout(d)
+        lay.addWidget(label(f"The plan says “{self.entries[r].get('ref') or '(nothing)'}”.", "Help"))
+        lw = QListWidget()
+        lw.setIconSize(QSize(96, 54))
+        for m in self.candidates(r):
+            rel = os.path.relpath(m, root) if root and os.path.commonpath([os.path.abspath(m), os.path.abspath(root)]) \
+                == os.path.abspath(root) else m
+            it = QListWidgetItem(rel)
+            it.setData(Qt.UserRole, rel)
+            pm = loader().thumb(m, 96, 54)
+            if pm is not None:
+                from PySide6.QtGui import QIcon
+                it.setIcon(QIcon(pm))
+            lw.addItem(it)
+        lw.itemDoubleClicked.connect(lambda _it: d.accept())
+        lay.addWidget(lw)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        lay.addWidget(bb)
+        d.resize(520, 420)
+        self._picker = d
+        if lw.count():
+            lw.setCurrentRow(0)
+        if d.exec() and lw.currentItem() is not None:
+            self._edit(r, "image", lw.currentItem().data(Qt.UserRole).replace("\\", "/"))
 
     def show_first_problem(self):
         """Select the first scene that can't be applied (or the first error in the list) so it's easy to find."""
@@ -1225,8 +1353,10 @@ class EditingPlanPanel(QWidget):
             QMessageBox.information(self, "AutoEditor", "Analyze the voiceover first.")
             return False
         if any(x["level"] == "error" for x in probs):
-            QMessageBox.warning(self, "Editing plan", "Nothing was applied - fix these first:\n\n" +
-                                "\n".join(x["msg"] for x in probs if x["level"] == "error")[:2500])
+            first = next(x["msg"] for x in probs if x["level"] == "error")
+            QMessageBox.warning(self, "Editing plan", self.summary(rows, probs) + "\n\nFirst problem: " + first
+                                + "\n\nEvery problem is listed under the plan; the first broken row is selected.")
+            self.show_first_problem()
             return False
         p["settings"]["scene_mode"] = "timed"
         try:

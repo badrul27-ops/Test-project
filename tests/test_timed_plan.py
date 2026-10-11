@@ -57,7 +57,8 @@ def main():
     msgs = " | ".join(x["msg"] for x in probs)
     for want in ("line 3 starts at 0:08.00 but line 2 runs until 0:09.00", "099.png isn't in the images folder",
                  "line 5 (0:20.00-0:24.00): choose an image", "line 6: not a scene row or a note - NOT used",
-                 "line 7: ends (0:22.00) before", "the narration continues until"):
+                 "line 7: ends (0:22.00) before",
+                 "nothing is assigned from 0:12.00 to 0:13.00"):
         assert want in msgs, (want, msgs)
     p["timed_plan"] = bad
     before = [dict(s) for s in p["scenes"]]

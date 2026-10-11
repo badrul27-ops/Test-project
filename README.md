@@ -1,4 +1,4 @@
-# AutoEditor v7.5.2
+# AutoEditor v7.6
 
 Automatic video editor for Windows. Everything runs on your own PC, and there's no subscription or API cost.
 
@@ -20,6 +20,30 @@ The first time you press *Analyze*, the speech model downloads once. The "small"
 ## Upgrading from an older version
 
 Unzip v6 **over** your existing AutoEditor folder and replace the files when Windows asks. Keep the `venv` folder, so you don't need to run setup again. Then start it with `run.bat` as before.
+
+## New in v7.6: plans that name pictures by folder (Numbered_Images/004.jpg) work
+
+**What was wrong.** On a line like `0:11.240 - 0:18.500 | Numbered_Images/004.jpg` the picture name was thrown
+away because it contained a `/` - so every row said "choose an image" although the times were read correctly.
+A name without a folder (`004.jpg`) also failed when a second `004.jpg` existed in `Character_References`.
+
+**Now:**
+- The whole picture reference is kept: folders, `/` or `\`, spaces, brackets, `.JPG`, quotes or backticks.
+- Pictures are found in this order: the exact path → the path inside your images folder → a folder you mapped →
+  the same folder + name anywhere in your images → the only *scene* picture with that name (shown in one short note).
+  Pictures in reference folders (`Character_References`, `refs`, …) are never picked by name alone, and when two
+  scene pictures have the same name you are asked to choose - nothing is guessed.
+- **Map folder…** (Editing Plan tab): if your plan says `Numbered_Images/` but the pictures are somewhere else,
+  choose the folder once - every row uses it. The choice is saved in this project.
+- **Choose image…** picks the picture for one scene (thumbnails + paths) and writes it into that plan line.
+- One short summary instead of a long popup: e.g. "96 timed rows; 94 images assigned … 1 row without an image;
+  1 image path that can't be found - use Map folder…". A row that only lacks its picture is no longer also
+  reported as a gap.
+- Times: `.24` and `.240` both mean 240 ms; seconds 60 or more after a colon are rejected. The last scene runs to
+  the true end of the narration (e.g. 635.611 s in the plan, 635.611429 s audio) and the difference is reported.
+- A pasted guide: an image *description* table (no times) becomes notes; one ``` block of timed lines is used on
+  its own; two different timed lists → nothing is applied.
+- A plan that fails never changes the timeline; the red banner says so (also when the timeline is empty).
 
 ## New in v7.5.2: you can always see whether the timeline follows your plan
 

@@ -1885,7 +1885,7 @@ class MainWindow(QMainWindow):
             return
         self._banner_key = key
         msg = ""
-        if p["settings"].get("scene_mode") == "timed" and p.get("scenes"):
+        if p["settings"].get("scene_mode") == "timed" and (p.get("scenes") or txt):
             if not txt:
                 msg = ("⚠  Draft only: there is no editing plan yet, so these pictures are placeholders (not matched to "
                        "your script). Click to open the Editing Plan.")
@@ -1896,7 +1896,10 @@ class MainWindow(QMainWindow):
                 except Exception as e:                      # never let the check itself break the window
                     probs = [{"level": "fatal", "msg": str(e)}]
                 fatal = [x for x in probs if x["level"] == "fatal"]
-                if fatal:
+                if fatal and not p.get("scenes"):
+                    msg = (f"⚠  The timeline is empty: your editing plan has {len(fatal)} problem(s), so it was not "
+                           "applied. Click to see the problems.")
+                elif fatal:
                     msg = (f"⚠  The timeline does NOT follow your editing plan: the plan has {len(fatal)} problem(s), "
                            "so it was not applied - you are seeing the previous timeline. Click to see the problems.")
                 elif probs:
