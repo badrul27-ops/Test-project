@@ -1,4 +1,4 @@
-# AutoEditor v7.5.1
+# AutoEditor v7.5.2
 
 Automatic video editor for Windows. Everything runs on your own PC, and there's no subscription or API cost.
 
@@ -20,6 +20,19 @@ The first time you press *Analyze*, the speech model downloads once. The "small"
 ## Upgrading from an older version
 
 Unzip v6 **over** your existing AutoEditor folder and replace the files when Windows asks. Keep the `venv` folder, so you don't need to run setup again. Then start it with `run.bat` as before.
+
+## New in v7.5.2: you can always see whether the timeline follows your plan
+
+If your editing plan has even one problem (for example an image name that isn't in the folder), it is **not
+applied** - and before this version nothing made that obvious: the timeline kept showing an older version, so the
+pictures didn't match the script. Now:
+- a **red banner above the timeline** says when the timeline does NOT follow your plan (problems in the plan, a
+  plan changed after it was applied, or no plan yet). Click it to jump to the problems.
+- the problems are listed **above** the scene table, the first broken scene is selected, and the status line
+  says plainly that the timeline still shows the previous version.
+- an image name that clearly means one file is used and reported (plan says `012.jpg`, folder has `012.png`,
+  `12.jpg` or `012 .jpg`). Before, a different file type was used without telling you, and the other cases
+  failed. If no file fits, the message suggests the nearest names ("did you mean 013.jpg?").
 
 ## New in v7.5.1: changing the images folder really replaces the images
 

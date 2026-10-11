@@ -55,7 +55,7 @@ def main():
     assert "2 files are named 003.png" in m2 and "write the folder too" in m2 and "2 files have this number" in m2, m2
     rows, probs = TP.parse_plan(bad, media, dur)
     msgs = " | ".join(x["msg"] for x in probs)
-    for want in ("line 3 starts at 0:08.00 but line 2 runs until 0:09.00", "099.png is missing",
+    for want in ("line 3 starts at 0:08.00 but line 2 runs until 0:09.00", "099.png isn't in the images folder",
                  "line 5 (0:20.00-0:24.00): choose an image", "line 6: not a scene row or a note - NOT used",
                  "line 7: ends (0:22.00) before", "the narration continues until"):
         assert want in msgs, (want, msgs)

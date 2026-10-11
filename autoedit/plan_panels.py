@@ -877,6 +877,7 @@ class EditingPlanPanel(QWidget):
             "Scene details " + ("▾" if c else "▸"))))
         self.problems = QListWidget()
         self.problems.setMaximumHeight(120)
+        self.problems.setWordWrap(True)
         self.problems.itemDoubleClicked.connect(self._goto)
         top = QWidget()
         tl = QVBoxLayout(top)
@@ -888,10 +889,10 @@ class EditingPlanPanel(QWidget):
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(0, 0, 0, 0)
         bl.addWidget(self.status)
+        bl.addWidget(self.problems)            # problems first: they decide whether anything can be applied
         bl.addWidget(self.table, 1)
         bl.addWidget(self.b_det)
         bl.addWidget(self.det)
-        bl.addWidget(self.problems)
         sp = QSplitter(Qt.Vertical)
         sp.setChildrenCollapsible(False)
         sp.addWidget(top)
@@ -1019,18 +1020,36 @@ class EditingPlanPanel(QWidget):
             self.problems.addItem(it)
         p = self.win.project
         errs = [x for x in probs if x["level"] == "error"]
+        self.problems.setVisible(bool(probs))
+        if errs and not quiet:
+            self.show_first_problem()
         cover = sum(r["end"] - r["start"] for r in rows)
         mode = "" if p["settings"].get("scene_mode") == "timed" else \
             "  (Applying switches scene mode to 'My timed edit plan'.)"
+        if hasattr(self.win, "update_plan_banner"):
+            self.win.update_plan_banner()
         if not (p.get("timed_plan") or "").strip():
             self.status.setText("No plan yet - paste it above, or Import Plan." + mode)
         else:
             self.status.setText(f"{len(self.entries)} scene(s) found, {len(rows)} valid; {cover:.2f} s of "
                                 f"{float(p.get('duration') or 0):.2f} s covered. " +
                                 ("✓ Ready to apply." if not errs else
-                                 f"✖ {len(errs)} problem(s) - nothing can be applied until they're fixed "
-                                 "(double-click one to jump to its line).") + mode)
+                                 f"✖ {len(errs)} problem(s) - nothing was applied, so the timeline still shows the "
+                                 "PREVIOUS version. Fix the red lines below (double-click one to jump to it), then "
+                                 "Apply to Timeline.") + mode)
         return rows, probs
+
+    def show_first_problem(self):
+        """Select the first scene that can't be applied (or the first error in the list) so it's easy to find."""
+        bad = next((i for i, e in enumerate(self.entries) if e.get("errors")), None)
+        if bad is not None:
+            self.table.setCurrentCell(bad, 0)
+            self.table.scrollToItem(self.table.item(bad, 0))
+        for i in range(self.problems.count()):
+            if self.problems.item(i).text().startswith("✖"):
+                self.problems.setCurrentRow(i)
+                self.problems.scrollToItem(self.problems.item(i))
+                break
 
     def check(self):                       # older name (tests, other windows)
         return self.validate()

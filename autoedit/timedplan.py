@@ -112,6 +112,40 @@ def _resolve_image(ref, media, index, n, problems, what="line", src_line=None):
                                     f"{os.path.basename(ref)}"})
             return None
         return pick[0]
+    if "." in base:                            # a file name: exact, or one clearly-meant file (always reported)
+        stem = os.path.splitext(base)[0]
+        norm = re.sub(r"\s+", "", base)
+        num = int(re.sub(r"\D", "", stem)) if re.fullmatch(r"\D*\d+\D*", stem) else None
+        if not same:
+            close = [m for m in media if os.path.splitext(os.path.basename(m))[0].lower() == stem]
+            how = "a different file type"
+            if not close:
+                close = [m for m in media if re.sub(r"\s+", "", os.path.basename(m).lower()) == norm]
+                how = "extra spaces in the name"
+            if not close and num is not None:
+                close = [m for m in media if os.path.splitext(os.path.basename(m))[0].isdigit()
+                         and int(os.path.splitext(os.path.basename(m))[0]) == num]
+                how = "the same number written differently"
+            if len(close) == 1:
+                problems.append({"line": ln, "level": "warning",
+                                 "msg": f"{where}: the plan says {os.path.basename(ref)} but the folder has "
+                                        f"{os.path.basename(close[0])} ({how}) - that file is used"})
+                return close[0]
+            if len(close) > 1:
+                problems.append({"line": ln, "level": "error",
+                                 "msg": f"{where}: {os.path.basename(ref)} isn't in the folder, and "
+                                        f"{len(close)} files could be meant ("
+                                        f"{', '.join(os.path.basename(m) for m in close[:4])}) - write the exact "
+                                        "file name"})
+                return None
+            import difflib
+            names = [os.path.basename(m) for m in media]
+            near = difflib.get_close_matches(os.path.basename(ref), names, n=3, cutoff=0.6)
+            problems.append({"line": ln, "level": "error",
+                             "msg": f"{where}: {os.path.basename(ref)} isn't in the images folder"
+                                    + (f" - did you mean {' or '.join(near)}?" if near else
+                                       " - check the name, or add the file to the folder")})
+            return None
     paths, bad = C.resolve(ref, media, index)
     if any("files have this number" in b_ for b_ in bad):
         problems.append({"line": ln, "level": "error",

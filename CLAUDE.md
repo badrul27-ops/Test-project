@@ -1,4 +1,4 @@
-# CLAUDE.md - AutoEditor (v7.5.1)
+# CLAUDE.md - AutoEditor (v7.5.2)
 
 Guide for Claude Code working in this repository. Read this first, then the code. The user-facing manual is
 `README.md`; this file is for the developer/agent.
@@ -228,7 +228,10 @@ v7.3.1 bug-fix release from a code review (no new features; regression checks in
 review table, strict apply without file-order fallback) · v7.5 main tabs Media / Editing Plan / Export (+More),
 Strict/Assisted plan, JSON + key=value + guidelines in plans, None = off, exact-frame cuts, diagnostic plan ·
 v7.5.1 changing/clearing the images folder replaces the picture set (`MainWindow._replace_media_set`: extra_media
-from elsewhere + scenes whose picture isn't in the new folder, one confirm, one undo step).
+from elsewhere + scenes whose picture isn't in the new folder, one confirm, one undo step) · v7.5.2
+`MainWindow.update_plan_banner` (red banner when the timeline doesn't follow the plan; cached), problems above the
+review table, `_resolve_image` uses a single clearly-meant file (other extension / spaces / same number) WITH a
+warning, else "did you mean" suggestions.
 
 ## 10. Typical user workflow (what to keep working)
 Start page: voiceover, images folder, script, video shape (More options: category, mode "Strict plan") → Create

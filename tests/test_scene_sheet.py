@@ -111,7 +111,7 @@ def main():
     rows_b, pb = TP.parse_plan(bad, media, p["duration"], 30, p["words"])
     mb = " | ".join(x["msg"] for x in pb)
     for want in ("SCENE 002: duration 5.000 s doesn't match start/end (4.600 s)", "“Gentle pan” has no direction",
-                 "SCENE 4: 050.png is missing", "nothing is assigned from"):
+                 "SCENE 4: 050.png isn't in the images folder", "nothing is assigned from"):
         assert want in mb, (want, mb)
     print("  parse: 4 scenes; unfilled placeholder, unsupported effect, unknown field and a sentence spoken outside its "
           "scene are reported; duration mismatch, pan without direction, missing image and gaps are errors")

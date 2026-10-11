@@ -139,7 +139,7 @@ def check_project_and_export(tmp):
     p["timed_plan"] = plan.replace("004.png", "099.png")
     prj.replan(p, log=lambda m: None)
     assert [(s["start"], s["end"], s.get("media")) for s in p["scenes"]] == before
-    assert p["plan_report"][0].startswith("Editing plan NOT applied") and "099.png is missing" in \
+    assert p["plan_report"][0].startswith("Editing plan NOT applied") and "099.png isn't in the images folder" in \
         " ".join(p["plan_report"])
     assert any(i["level"] == "fatal" for i in I.validate(p)), "export must stay blocked"
     # ---- a valid plan: exact images and times on the timeline, notes kept with the scene
@@ -289,6 +289,29 @@ def check_window(tmp, p, rows, dur):
     assert abs(w.project["scenes"][1]["start"] - I.snap(new_cut, FPS)) < 1e-9
     w.do_undo()
     panel.load()
+    # the user's case: a plan with one broken row is NOT applied - the old timeline stays, and that is now shouted
+    w.update_plan_banner()
+    assert not w.plan_banner.isVisibleTo(w), w.plan_banner.text()          # timeline == plan: no banner
+    applied = [(s["start"], s["media"]) for s in w.project["scenes"]]
+    good = w.project["timed_plan"]
+    broken = good.replace("| 004.png |", "| 044.png |")
+    panel._set_text(broken, "Edit editing plan")
+    rows_, probs_ = panel.validate(quiet=True)
+    panel.show_first_problem()
+    assert not panel.apply() and [(s["start"], s["media"]) for s in w.project["scenes"]] == applied
+    assert w.plan_banner.isVisibleTo(w) and "does NOT follow your editing plan" in w.plan_banner.text()
+    assert panel.table.currentRow() == 2 and panel.table.item(2, 6).text().startswith("✖")
+    assert "did you mean" in panel.table.item(2, 6).toolTip()
+    assert "timeline still shows the PREVIOUS version" in panel.status.text()
+    # a name that clearly means one file (other extension) is used - and said so
+    panel._set_text(good.replace("| 004.png |", "| 004.jpg |"), "Edit editing plan")
+    assert panel.apply()
+    assert os.path.basename(w.project["scenes"][2]["media"]) == "004.png"
+    assert any("the plan says 004.jpg but the folder has 004.png" in m for m in w.project["plan_report"])
+    w.update_plan_banner()
+    assert not w.plan_banner.isVisibleTo(w)
+    print("  broken plan row: Apply refused, previous timeline kept, red banner over the timeline, broken row "
+          "selected with 'did you mean …'; 004.jpg vs 004.png is used and reported")
     if os.environ.get("AE_SHOTS"):
         os.makedirs(os.environ["AE_SHOTS"], exist_ok=True)
         panel.validate(quiet=True)

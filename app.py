@@ -201,6 +201,7 @@ class MainWindow(QMainWindow):
         before, self._last_state = self._last_state, now
         if _caption_inputs(before) != _caption_inputs(now) and hasattr(self, "timeline"):
             self.refresh_timeline()            # caption blocks depend on these - keep the CC track in step
+        self.update_plan_banner()
         self.update_status()
         return True
 
@@ -1051,6 +1052,17 @@ class MainWindow(QMainWindow):
         tll.setContentsMargins(8, 4, 8, 0)
         tll.setSpacing(4)
         tll.addLayout(tbar)
+        # loud warning whenever the timeline is NOT what the editing plan says (never a silent mismatch)
+        self.plan_banner = QPushButton("")
+        self.plan_banner.setObjectName("PlanBanner")
+        self.plan_banner.setStyleSheet("QPushButton#PlanBanner { background: #6B1F24; color: #FFFFFF; border: 1px solid "
+                                       "#E5484D; border-radius: 6px; padding: 6px 10px; text-align: left; "
+                                       "font-weight: 600; }")
+        self.plan_banner.setCursor(Qt.PointingHandCursor)
+        self.plan_banner.clicked.connect(self._banner_clicked)
+        self.plan_banner.setVisible(False)
+        self._banner_key = None
+        tll.addWidget(self.plan_banner)
         self.tl_area = self._scroll(self.timeline)
         self.tl_area.setFrameShape(QFrame.NoFrame)
         self.tl_area.setMinimumHeight(120)
@@ -1857,10 +1869,54 @@ class MainWindow(QMainWindow):
         s.setValue("ui/tabs6", self.a_toggle_tabs.isChecked())
 
     # ======================================================================== refresh (never writes)
+    def update_plan_banner(self):
+        """Red banner above the timeline when it doesn't follow the editing plan (plan has problems, or was
+        changed after it was applied, or there is no plan yet)."""
+        if not hasattr(self, "plan_banner"):
+            return
+        import hashlib
+        import json
+        p = self.project
+        txt = (p.get("timed_plan") or "").strip()
+        key = hashlib.sha1(json.dumps([p["settings"].get("scene_mode"), txt, p.get("media_dir"), p.get("extra_media"),
+                                       [(s.get("id"), s.get("start"), s.get("media")) for s in p.get("scenes") or []]],
+                                      default=str).encode("utf-8")).hexdigest()
+        if key == self._banner_key:
+            return
+        self._banner_key = key
+        msg = ""
+        if p["settings"].get("scene_mode") == "timed" and p.get("scenes"):
+            if not txt:
+                msg = ("⚠  Draft only: there is no editing plan yet, so these pictures are placeholders (not matched to "
+                       "your script). Click to open the Editing Plan.")
+            else:
+                from autoedit.timedplan import problems_for_export
+                try:
+                    probs = problems_for_export(p)
+                except Exception as e:                      # never let the check itself break the window
+                    probs = [{"level": "fatal", "msg": str(e)}]
+                fatal = [x for x in probs if x["level"] == "fatal"]
+                if fatal:
+                    msg = (f"⚠  The timeline does NOT follow your editing plan: the plan has {len(fatal)} problem(s), "
+                           "so it was not applied - you are seeing the previous timeline. Click to see the problems.")
+                elif probs:
+                    msg = ("⚠  The timeline does NOT follow your editing plan: the plan (or the timeline) changed after "
+                           "it was applied. Click, then press Apply to Timeline.")
+        self.plan_banner.setText(msg)
+        self.plan_banner.setToolTip(msg)
+        self.plan_banner.setVisible(bool(msg))
+
+    def _banner_clicked(self):
+        self.tools.setCurrentIndex([b.text() for b in self.tools.buttons].index("Editing Plan"))
+        panel = self.instr_panel.plan_panel
+        panel.validate()
+        panel.show_first_problem()
+
     def refresh_all(self):
         """Reload every control from the project. Controls are signal-blocked, so this
         can't change settings."""
         self.load_controls()
+        self.update_plan_banner()
         self.update_media_count()
         self.update_input_info()
         self.update_sfx_status()
