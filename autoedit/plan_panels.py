@@ -770,8 +770,9 @@ DETAIL_GROUPS = (("Transition", ("transition",)), ("Sound effects", ("sound",)),
 class EditingPlanPanel(QWidget):
     """THE editing plan: paste or import it, validate it, review every scene in a table, apply it to the
     timeline. Strict: the timeline gets exactly these images and times - never a file-order fallback."""
-    COLS = ("Image", "Start", "End", "Duration", "Motion", "Notes", "Status")
-    FIELDS = ("image", "start", "end", None, "motion", "notes", None)
+    COLS = ("Image", "Script excerpt", "Start", "End", "Duration", "Motion", "Status")
+    FIELDS = ("image", None, "start", "end", None, "motion", None)
+    STATUS_COL = 6
 
     def __init__(self, win, big=False):
         super().__init__()
@@ -780,11 +781,12 @@ class EditingPlanPanel(QWidget):
         self.win, self.entries, self._filling = win, [], False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(label("Editing plan", "Section"))
-        lay.addWidget(label("Paste or import your whole plan: which image is on screen from which second to which "
-                            "second, plus how it should look. Validate shows every scene below; Apply puts exactly "
-                            "those images and times on the timeline. The narration script stays in the Script tab.",
-                            "Help"))
+        if big:
+            lay.addWidget(label("Editing plan", "Section"))
+        hl = label("Paste or Import Plan → Validate → Apply to Timeline. Examples: click in the empty box, or More → "
+                   "Save a plan template. (The narration script stays separate.)", "Help")
+        hl.setToolTip(PLAN_HELP)
+        lay.addWidget(hl)
         self.edit = QPlainTextEdit()
         self.edit.setPlaceholderText(PLAN_HELP)
         self.edit.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
@@ -814,6 +816,9 @@ class EditingPlanPanel(QWidget):
         m.addAction("Fill template from narration", self.fill_template)
         m.addAction("Fill scene-sheet template", lambda: self.fill_template(sheet=True))
         m.addAction("Update plan from timeline", self.from_timeline)
+        m.addSeparator()
+        m.addAction("Save a plan template…", self.save_template)
+        m.addAction("Save diagnostic plan (what the timeline uses)…", self.save_diagnostic)
         if not big:
             m.addAction("Open in a large window (F9)", lambda: self.win.open_plan_window())
         more.setMenu(m)
@@ -838,8 +843,11 @@ class EditingPlanPanel(QWidget):
         hh = self.table.horizontalHeader()
         for c in range(len(self.COLS)):
             hh.setSectionResizeMode(c, QHeaderView.Interactive)
-        hh.setSectionResizeMode(5, QHeaderView.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setIconSize(QSize(48, 27))
         self.table.setMinimumHeight(220 if not big else 160)
+        from .media_bin import loader
+        loader().updated.connect(self._refresh_icons)
         self.table.itemChanged.connect(self._cell_changed)
         self.table.currentCellChanged.connect(lambda *_: self._show_details())
         self.table.cellDoubleClicked.connect(self._row_double_clicked)
@@ -856,8 +864,14 @@ class EditingPlanPanel(QWidget):
         self.det_look.setPlaceholderText("Look for this scene, e.g.  crossfade, sfx whoosh.wav, show 006.mp4 as "
                                          "b-roll, sepia, text \"Morocco, 1910\"")
         self.det_look.editingFinished.connect(self._look_edited)
+        self.det_notes = QLineEdit()
+        self.det_notes.setPlaceholderText("Notes for this scene (kept with it - not applied as edits)")
+        self.det_notes.editingFinished.connect(self._notes_edited)
         dl.addWidget(self.det_text)
+        dl.addWidget(label("Look (sound, B-roll, effects, text, transition):", "Help"))
         dl.addWidget(self.det_look)
+        dl.addWidget(label("Notes:", "Help"))
+        dl.addWidget(self.det_notes)
         self.det.setVisible(False)
         self.b_det.toggled.connect(lambda c: (self.det.setVisible(c), self.b_det.setText(
             "Scene details " + ("▾" if c else "▸"))))
@@ -867,9 +881,9 @@ class EditingPlanPanel(QWidget):
         top = QWidget()
         tl = QVBoxLayout(top)
         tl.setContentsMargins(0, 0, 0, 0)
-        tl.addWidget(self.edit, 1)
-        for row_ in (r if isinstance(r, tuple) else (r,)):
+        for row_ in (r if isinstance(r, tuple) else (r,)):   # the actions first: visible even on small screens
             tl.addLayout(row_)
+        tl.addWidget(self.edit, 1)
         bottom = QWidget()
         bl = QVBoxLayout(bottom)
         bl.setContentsMargins(0, 0, 0, 0)
@@ -954,6 +968,35 @@ class EditingPlanPanel(QWidget):
         self._set_text(timedplan.export_sheet(p), "Update plan from timeline")
         self.validate()
 
+    def save_template(self):
+        from . import timedplan
+        path, flt = QFileDialog.getSaveFileName(self, "Save a plan template", "editing_plan_template.md",
+                                                "Markdown table (*.md);;CSV (*.csv);;JSON (*.json);;Plain lines (*.txt)")
+        if not path:
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in timedplan.TEMPLATES:
+            ext = {"CSV": ".csv", "JSON": ".json", "Plain": ".txt"}.get(flt.split(" ")[0], ".md")
+            path += ext
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(timedplan.TEMPLATES[ext])
+        self.win.status_msg(f"Template saved: {path} - fill it in, then Import Plan.")
+
+    def save_diagnostic(self):
+        from . import timedplan
+        p = self.win.project
+        if not p.get("scenes"):
+            QMessageBox.information(self, "AutoEditor", "The timeline is empty - apply a plan first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save diagnostic plan", "diagnostic_plan.json", "JSON (*.json)")
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        d = timedplan.save_diagnostic_plan(p, path)
+        self.win.status_msg(f"Diagnostic plan saved ({len(d['scenes'])} scenes, timeline revision "
+                            f"{d['timeline_revision']}): {path} and a .csv next to it.")
+
     # ------------------------------------------------------------------ validate / review table
     def _parse(self):
         from . import timedplan
@@ -1008,21 +1051,26 @@ class EditingPlanPanel(QWidget):
         self._filling = True
         cur = self.table.currentRow()
         self.table.setRowCount(len(self.entries))
+        from .scenes import scene_text
+        words = self.win.project.get("words") or []
         for i, e in enumerate(self.entries):
             a, b = e.get("start"), e.get("end")
-            vals = (e.get("ref") or "", _f(a) if a is not None else "", _f(b) if b is not None else "",
-                    f"{b - a:.2f}" if a is not None and b is not None else "", e.get("motion") or "",
-                    e.get("notes") or "")
+            said = scene_text(words, a, b) if words and a is not None and b is not None else ""
+            vals = (e.get("ref") or "", said[:90] + ("…" if len(said) > 90 else ""),
+                    _f(a) if a is not None else "", _f(b) if b is not None else "",
+                    f"{b - a:.2f}" if a is not None and b is not None else "", e.get("motion") or "")
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
                 if self.FIELDS[c] is None:
                     it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-                if c == 1 and a is not None:
+                if c == 2 and a is not None:
                     it.setToolTip(f"{a:.3f} s exactly")
-                if c == 2 and b is not None:
+                if c == 3 and b is not None:
                     it.setToolTip(f"{b:.3f} s exactly")
-                if c == 5 and v:
-                    it.setToolTip(v)
+                if c == 1:
+                    it.setToolTip(said or "Analyze the voiceover to see what is said here")
+                if c == 0 and e.get("media"):
+                    it.setToolTip(e["media"])
                 self.table.setItem(i, c, it)
             if e.get("errors"):
                 st, col, tip = "✖ " + e["errors"][0].split(": ", 1)[-1], "#FF5252", "\n".join(e["errors"])
@@ -1032,15 +1080,18 @@ class EditingPlanPanel(QWidget):
                 st, col, tip = "✓ On the timeline", "#4CAF50", "This scene is on the timeline exactly as planned."
             else:
                 st, col, tip = "✓ Valid - not applied yet", "#4FA3FF", "Press Apply to Timeline."
+            if e.get("notes"):
+                tip += "\n\nNotes: " + e["notes"]
             it = QTableWidgetItem(st)
             it.setFlags(it.flags() & ~Qt.ItemIsEditable)
             it.setForeground(QColor(col))
             it.setToolTip(tip)
-            self.table.setItem(i, 6, it)
+            self.table.setItem(i, self.STATUS_COL, it)
             self.table.setVerticalHeaderItem(i, QTableWidgetItem(str(e["scene"] if e.get("scene") is not None
                                                                      else i + 1)))
         self.table.resizeColumnsToContents()
-        self.table.setColumnWidth(5, max(160, self.table.columnWidth(5) if self.table.columnWidth(5) < 320 else 320))
+        self.table.setColumnWidth(1, min(320, max(160, self.table.columnWidth(1))))
+        self._refresh_icons()
         if 0 <= cur < len(self.entries):
             self.table.setCurrentCell(cur, 0)
         self._filling = False
@@ -1067,6 +1118,25 @@ class EditingPlanPanel(QWidget):
         if 0 <= r < self.table.rowCount():
             self.table.setCurrentCell(r, 0)
 
+    def _refresh_icons(self):
+        """Thumbnails arrive from the background loader - the table never waits for them."""
+        from .media_bin import loader
+        for i, e in enumerate(self.entries):
+            it = self.table.item(i, 0)
+            if it is None or not e.get("media"):
+                continue
+            pm = loader().thumb(e["media"], 64, 36)
+            if pm is not None:
+                from PySide6.QtGui import QIcon
+                was, self._filling = self._filling, True
+                it.setIcon(QIcon(pm))
+                self._filling = was
+
+    def _notes_edited(self):
+        r = self.table.currentRow()
+        if 0 <= r < len(self.entries) and self.det_notes.text().strip() != (self.entries[r].get("notes") or ""):
+            self._edit(r, "notes", self.det_notes.text())
+
     def _look_edited(self):
         r = self.table.currentRow()
         if 0 <= r < len(self.entries) and self.det_look.text().strip() != (self.entries[r].get("look") or ""):
@@ -1077,7 +1147,9 @@ class EditingPlanPanel(QWidget):
         if not (0 <= r < len(self.entries)):
             self.det_text.setText("Select a scene in the table to see its details.")
             self.det_look.setEnabled(False)
+            self.det_notes.setEnabled(False)
             return
+        self.det_notes.setEnabled(True)
         e = self.entries[r]
         interp = [m for _c, m in (e.get("interp") or [])]
         lines = [f"Plan line {e.get('src_line') or e['line']} ({ {'sheet': 'scene sheet', 'table': 'table row', 'csv': 'CSV row', 'lines': 'plan line'}.get(e.get('fmt'), e.get('fmt')) })"]
@@ -1104,6 +1176,8 @@ class EditingPlanPanel(QWidget):
                                  "Scene sheets keep these in their own fields - edit them in the plan text")
         with QSignalBlocker(self.det_look):
             self.det_look.setText(e.get("look") or "")
+        with QSignalBlocker(self.det_notes):
+            self.det_notes.setText(e.get("notes") or "")
 
     def _row_double_clicked(self, r, c):
         if self.FIELDS[c] is None and 0 <= r < len(self.entries):

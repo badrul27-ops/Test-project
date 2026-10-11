@@ -376,8 +376,17 @@ def render_all(project, progress=None, should_stop=None, log=print, draft=False,
                stats=None):
     """One export action = the chosen aspect ratio only (plus batch formats if batch export is on)."""
     from .exportcfg import export_formats
+    from .timedplan import save_diagnostic_plan, timeline_revision
     st = project["settings"]
     preflight(project, log)
+    rev = timeline_revision(project)
+    log(f"Exporting timeline revision {rev} ({len(project.get('scenes') or [])} scenes)")
+    try:                                       # what this export was made from - for checking afterwards
+        work = os.path.join(_out_dir(project), "_autoedit_work")
+        os.makedirs(work, exist_ok=True)
+        save_diagnostic_plan(project, os.path.join(work, "last_export_plan.json"))
+    except OSError as e:
+        log(f"(Couldn't save the diagnostic plan: {e})")
     work = os.path.join(_out_dir(project), "_autoedit_work")
     os.makedirs(work, exist_ok=True)
     stats = stats if stats is not None else {}

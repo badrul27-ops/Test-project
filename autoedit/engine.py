@@ -267,6 +267,9 @@ class Compositor:
         return max(0, bisect.bisect_right(self.starts, t) - 1)
 
     def frame_at(self, t, captions=True):
+        # cut times are stored frame-snapped to 6 decimals (instructions.snap); frame i is drawn at i/fps, e.g.
+        # 221/30 = 7.3666666… < 7.366667 - round the same way, or such a cut would show up one frame late
+        t = round(float(t), 6)
         sc = self.scenes
         n = len(sc)
         if n == 0:

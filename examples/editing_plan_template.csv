@@ -1,0 +1,4 @@
+scene_id,image,start,end,motion,transition,sfx,notes
+S001,001.png,00:00.000,00:04.200,zoom_in,cut,,opening shot
+S002,002.png,00:04.200,00:08.800,none,crossfade,whoosh.wav,
+S003,003.png,00:08.800,00:12.000,pan right,cut,none,

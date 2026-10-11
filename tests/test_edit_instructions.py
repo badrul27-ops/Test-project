@@ -348,8 +348,8 @@ def main():
     # the other boundaries were not given a transition: a straight cut there (no blend frame)
     c2 = next(s["end"] for s in p["scenes"][:-1] if s is not s7 and s.get("transition") == "cut" and
               s["media"].endswith(".png") and p["scenes"][p["scenes"].index(s) + 1]["media"].endswith(".png"))
-    import math
-    nb = math.ceil(c2 * FPS - 1e-6)                       # first frame of the next scene
+    nb = int(round(c2 * FPS))                             # first frame of the next scene (cuts are frame-snapped;
+    # v7.5: ceil() here matched an old engine bug that showed a cut one frame late when snap() rounded up)
     fr = [frame(out7, n / FPS).astype(int) for n in range(nb - 2, nb + 3)]
     diffs = [np.abs(a - b).mean() for a, b in zip(fr, fr[1:])]
     assert int(np.argmax(diffs)) == 1 and sorted(diffs)[-2] < 0.35 * max(diffs), diffs   # one clean jump

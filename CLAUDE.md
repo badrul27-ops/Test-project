@@ -1,4 +1,4 @@
-# CLAUDE.md - AutoEditor (v7.4.0)
+# CLAUDE.md - AutoEditor (v7.5.0)
 
 Guide for Claude Code working in this repository. Read this first, then the code. The user-facing manual is
 `README.md`; this file is for the developer/agent.
@@ -65,7 +65,7 @@ ffprobe** dependency - `mediainfo.probe()` parses `ffmpeg -i` output.
 | test_instructions_gui | the Editing instructions window (F8) + guidelines |
 | test_timed_plan | timed edit plan: template, line errors, exact build, real export, window |
 | test_scene_sheet | SCENE-block sheet format, strict None defaults, GENERAL RULES export format, write-back |
-| test_editing_plan | one Editing plan panel; compact/Markdown/CSV/scene-block/notes → one schema (incl. the user's failing Markdown row `\| 23 \| 023.jpg \| 01:56.84 \| 02:06.76 \| 9.92 \|`); broken plan never falls back to file order; table edit → plan text; Apply changes the timeline AND exported frames |
+| test_editing_plan | one Editing plan panel; compact/key=value/Markdown/CSV/JSON/scene-block/notes/guidelines → one schema (incl. the user's failing Markdown row `\| 23 \| 023.jpg \| 01:56.84 \| 02:06.76 \| 9.92 \|`); explicit None = off; templates parse; broken plan never falls back to file order; strict 3-scene plan: last/first frame at every cut correct in PREVIEW and EXPORT; revision + diagnostic plan; save/reload/replan stable; table edit → plan text; Apply changes the timeline AND exported frames |
 
 `tests.test_sfx` and `tools/make_sfx.py` also need `scipy` (not needed by the app itself). On a bare Linux
 box Qt needs system libraries such as `libegl1`, `libgl1`, `libxkbcommon0`, `libfontconfig1`.
@@ -101,7 +101,7 @@ anything - they only draw the timeline.
 |---|---|
 | `project.py` | project JSON: `new_project`, `load` (+migration), `save`, `analyze`, `replan`, `keep_ids`, `estimate_words` (flagged fallback when speech recognition fails), `project_media` |
 | `transcribe.py` | faster-whisper word timestamps; `apply_script` corrects spelling from the script |
-| `timedplan.py` | **Editing plan** (stored in `project["timed_plan"]`). `parse_entries` turns every format into one schema: compact lines (`0:00 - 0:04 \| 001.png \| slow zoom in, crossfade`), Markdown tables (header + separator rows, `COLUMNS` synonyms), CSV with a header, **scene sheets** (`SCENE 001` blocks → `parse_sheet`), and note lines (`- **065.jpg:** …`, `Scene 12: …`) attached as notes (never timing rows, never applied as edits). Start/end are authoritative; a duration is only checked. `parse_plan` (rows, problems), `edit_entry` / `plan_as_table` / `_sheet_set` (review-table edits → plan text), `build`, `template`, `sheet_template`, `export_sheet`, `problems_for_export` |
+| `timedplan.py` | **Editing plan** (stored in `project["timed_plan"]`). `parse_entries` turns every format into one schema: compact lines (`0:00 - 0:04 \| 001.png \| slow zoom in, crossfade`), `key=value` extras (`motion=zoom_in`), Markdown tables (header + separator rows, `COLUMNS` synonyms), CSV with a header, versioned JSON (`{"version": 1, "guidelines", "scenes"}`), a PROJECT GUIDELINES section (`_guidelines`: format + motion_level/transition/fit overrides applied in `build`, the rest listed NOT applied), **scene sheets** (`SCENE 001` blocks → `parse_sheet`), and note lines (`- **065.jpg:** …`, `Scene 12: …`) attached as notes (never timing rows, never applied as edits). Start/end are authoritative; a duration is only checked. Empty cell = inherit, `none` = off (`_col_phrase`, `NONE_PHRASE`). `parse_plan` (rows, problems), `TEMPLATES`, `diagnostic_plan` / `save_diagnostic_plan` / `timeline_revision` (logged by `render_all`, which also writes `_autoedit_work/last_export_plan.json`), `edit_entry` / `plan_as_table` / `_sheet_set` (review-table edits → plan text), `build`, `template`, `sheet_template`, `export_sheet`, `problems_for_export` |
 | `instructions.py` | per-scene editing instructions: records, deterministic NL parser `parse()`, `resolve()` (words→times, names→files, choices for ambiguity), `apply()` (writes timeline; `placed=True` fast path), `place()` (carves the timeline, conflicts), `validate()` (fatal vs warning), JSON/CSV import/export, `lock_field`, `refresh_resolved` (narration changed), `flag_framing_review` (aspect changed) |
 | `planner.py` | smart planning: `sentences`, topic boundaries, TF-IDF matching `similarity_matrix/assign`, project/scene instruction phrase parsing, scene map CSV/JSON, `keep_locked`, `apply_guidelines` (transition default/frequency, no-shake, no-flash), `scene_warnings` |
 | `scenes.py` | classic splitting (pauses), motion levels `apply_motion_level`, `reassign_transitions`, `scene_text` |
@@ -192,8 +192,9 @@ Legacy `formats`, `quality` are kept only for migration.
   `render.Cancelled`.
 - Everything visual must go through `Compositor` (preview == export). Don't add render-only or preview-only
   behaviour.
-- Times: seconds as floats, absolute; snap with `instructions.snap(t, fps)` (`round(t*fps)/fps`, no
-  accumulation). The muxer pads audio (`-af apad -shortest`) so every rendered frame is kept.
+- Times: seconds as floats, absolute; snap with `instructions.snap(t, fps)` (`round(t*fps)/fps` rounded to 6
+  decimals, no accumulation). `Compositor.frame_at` rounds t to 6 decimals too - without it a cut whose snapped
+  value rounded UP showed one frame late (fixed in v7.5). The muxer pads audio (`-af apad -shortest`) so every rendered frame is kept.
 - Exports: temp file in `_autoedit_work`, `check_export`, then `os.replace`; never report success otherwise.
 - Keep `pyflakes` clean; line length ~120; user-facing strings in plain English, no jargon; say "NOT applied"
   when something can't be done.
@@ -212,6 +213,7 @@ Legacy `formats`, `quality` are kept only for migration.
 - Not tested on Windows by the developer. Speech model downloads on first Analyze (~0.5 GB "small").
 - Benchmark (2-core Linux, 60 s 1080p): v6.6 default 104.8 s; v7 Standard (x264 veryfast crf18) 55.2 s at equal
   SSIM/PSNR; High 129 s; Draft 37.6 s. Frame building (~40-48 s) is the next bottleneck if speed is needed.
+  v7.5 on a 4-core Xeon 2.1 GHz: v7.4.0 43.0 s → v7.5.0 44.1 s total (noise), compose 29.7 s of 38-39 s render.
 - Pan direction semantics were flipped in v7.3 to film convention (pan right = camera moves right).
 
 ## 9. Version history (short)
@@ -223,11 +225,12 @@ v7.1 per-scene Editing instructions (F8), guidelines, JSON/CSV import · v7.2 re
 v7.3 scene-sheet format, editable per-scene summaries, write-back, film-convention pans ·
 v7.3.1 bug-fix release from a code review (no new features; regression checks in test_core
 `check_review_fixes*` and test_gui_state `check_review_fixes`) · v7.4 one Editing plan panel (Markdown/CSV/notes,
-review table, strict apply without file-order fallback).
+review table, strict apply without file-order fallback) · v7.5 main tabs Media / Editing Plan / Export (+More),
+Strict/Assisted plan, JSON + key=value + guidelines in plans, None = off, exact-frame cuts, diagnostic plan.
 
 ## 10. Typical user workflow (what to keep working)
-Start page: voiceover, images folder, script, video shape, category, mode "My editing plan (strict)" → Open the
-editor (auto-Analyze) → Instructions tab → Editing plan (or F9): paste / *Import Plan* (or *More → Fill
+Start page: voiceover, images folder, script, video shape (More options: category, mode "Strict plan") → Create
+project (auto-Analyze) → Editing Plan tab (or F9): paste / *Import Plan* (or *More → Fill
 template*) → *Validate* → check the table (fix cells or text) → *Apply to Timeline* → Editing instructions (F8)
 opens: verify/adjust each scene → Review scenes (Ctrl+Shift+R) / Quality check (F7) → Export (Ctrl+E) → one
 verified MP4.

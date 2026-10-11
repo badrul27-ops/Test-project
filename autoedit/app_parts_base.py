@@ -212,7 +212,9 @@ class ToolTabBar(QWidget):
     panel is too narrow - it never wraps into a tall sidebar."""
     currentChanged = Signal(int)
 
-    def __init__(self, tabs):
+    def __init__(self, tabs, primary=None):
+        """tabs: (name, icon, tip) in PAGE order (button id = page index). primary: names shown first; the
+        rest sit behind a 'More' toggle (shown automatically while one of them is open)."""
         super().__init__()
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
@@ -235,8 +237,29 @@ class ToolTabBar(QWidget):
             b.setMinimumWidth(max(46, fm.horizontalAdvance(name) + 12))
             b.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             self.group.addButton(b, i)
-            lay.addWidget(b)
             self.buttons.append(b)
+        primary = [n for n in (primary or []) if n in [t[0] for t in tabs]]
+        first = [b for n in primary for b in self.buttons if b.text() == n]
+        self.secondary = [b for b in self.buttons if b not in first]
+        for b in first:
+            lay.addWidget(b)
+        self.more = None
+        if primary and self.secondary:
+            self.more = QToolButton()
+            self.more.setObjectName("ToolTab")
+            self.more.setCheckable(True)
+            self.more.setText("More ▸")
+            self.more.setToolTip("Script, audio, text, effects, transitions, captions, stock")
+            self.more.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            self.more.setIcon(icon("effects"))
+            self.more.setIconSize(QSize(20, 20))
+            self.more.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            self.more.toggled.connect(self._show_more)
+            lay.addWidget(self.more)
+        for b in self.secondary:
+            lay.addWidget(b)
+        if self.more is not None:
+            self._show_more(False)
         lay.addStretch(1)
         self.scroll = QScrollArea()
         self.scroll.setWidget(inner)
@@ -251,10 +274,24 @@ class ToolTabBar(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self.scroll)
         self.group.idToggled.connect(lambda i, on: on and self.currentChanged.emit(i))
+        self.group.idToggled.connect(lambda i, on: on and self.more is not None and
+                                     self.buttons[i] in self.secondary and self._show_more(True))
         self.buttons[0].setChecked(True)
+
+    def _show_more(self, on):
+        cur = self.group.checkedButton()
+        on = on or cur in self.secondary          # never hide the tab that is open
+        for b in self.secondary:
+            b.setVisible(on)
+        if self.more is not None:
+            with QSignalBlocker(self.more):
+                self.more.setChecked(on)
+            self.more.setText("More ▾" if on else "More ▸")
 
     def setCurrentIndex(self, i):
         if 0 <= i < len(self.buttons):
+            if self.buttons[i] in getattr(self, "secondary", []) and self.more is not None:
+                self._show_more(True)
             self.buttons[i].setChecked(True)
             self.scroll.ensureWidgetVisible(self.buttons[i])
 

@@ -1,0 +1,4 @@
+# One line per scene:  start - end | image | how it looks (optional)
+00:00.000 - 00:04.200 | 001.png | motion=zoom_in | transition=cut
+00:04.200 - 00:08.800 | 002.png | motion=none | transition=crossfade
+00:08.800 - 00:12.000 | 003.png | pan right, cut

@@ -48,8 +48,8 @@ from autoedit.scenes import reassign_transitions, scene_text
 from autoedit.theme import WheelGuard, apply_theme
 from autoedit.util import APP_DIR, AUDIO_EXT, IMAGE_EXT, VIDEO_EXT, fmt_time, folder_report, is_video, list_media
 
-SCENE_MODES = [("My editing plan (strict) - exact images and seconds", "timed"),
-               ("Smart - script topics + image descriptions", "smart"),
+SCENE_MODES = [("Strict plan - your editing plan's exact images and times", "timed"),
+               ("Assisted plan - matches images by their descriptions (review it)", "smart"),
                ("Auto - split at pauses", "auto"), ("One scene per media file", "match_media"),
                ("Follow my directions (scene list / [1] markers)", "script_cues"),
                ("Timestamp file names (0-03.png)", "timestamps")]
@@ -123,13 +123,15 @@ STATE_KEYS = ("name", "voiceover", "script", "media_dir", "music", "sfx_dir", "o
               "plan_report", "edit_instructions", "extra_sfx", "timed_plan")
 TOOL_TABS = [("Media", "media", "Voiceover, script, media bin and scene planning"),
              ("Script", "script", "The exact narration text and the script-vs-recording check"),
-             ("Instructions", "instructions", "Project and scene instructions, scene map and image prompts"),
+             ("Editing Plan", "instructions", "Your editing plan: which image from which second, how it looks"),
              ("Audio", "audio", "Voice and music levels, fades, ducking, sound effects"),
              ("Text", "text", "Hook title, text cards and chapters"),
              ("Effects", "effects", "Whole-video atmosphere and overlay"),
              ("Transitions", "transitions", "Change and preview transitions"),
              ("Captions", "captions", "Caption style, font, colours, position"),
-             ("Stock", "stock", "Search Pexels / Pixabay stock B-roll with your own API keys")]
+             ("Stock", "stock", "Search Pexels / Pixabay stock B-roll with your own API keys"),
+             ("Export", "export", "Check and export ONE video in the shape and size you chose")]
+MAIN_TABS = ("Media", "Editing Plan", "Export")       # the workflow; the rest sit behind 'More' 
 AUTOSAVE_MS = 30000
 
 
@@ -562,7 +564,7 @@ class MainWindow(QMainWindow):
         video_f = "Video (" + " ".join("*" + e for e in sorted(VIDEO_EXT)) + ")"
 
         # ---------------- left: horizontal tool tabs + pages
-        self.tools = ToolTabBar(TOOL_TABS)
+        self.tools = ToolTabBar(TOOL_TABS, primary=MAIN_TABS)
         self.pages = QStackedWidget()
         self.tools.currentChanged.connect(self.pages.setCurrentIndex)
 
@@ -683,7 +685,7 @@ class MainWindow(QMainWindow):
         self.script_panel = ScriptPanel(self)
         lay.addWidget(self.script_panel, 1)
         self.pages.addWidget(pg)
-        pg, lay = page("Instructions", "Tell AutoEditor what to show and when. Locked scenes are never changed.")
+        pg, lay = page("Editing Plan")
         self.instr_panel = InstructionsPanel(self)
         lay.addWidget(self.instr_panel, 1)
         self.pages.addWidget(pg)
@@ -886,6 +888,32 @@ class MainWindow(QMainWindow):
         self.stock.downloaded.connect(self.on_stock_downloaded)
         self.stock.log.connect(self.log)
         lay.addWidget(self.stock, 1)
+        self.pages.addWidget(pg)
+
+        # Export (workflow step 3: the settings live in the right panel's Export tab - one place) ------------
+        pg, lay = page("Export", "One export = one video in the shape and size you chose.")
+        self.exp_summary = label("", "Help")
+        lay.addWidget(self.exp_summary)
+        for text, act, primary_ in (("Export video (Ctrl+E)", self.a_render, True),
+                                    ("Quality check (F7)", self.a_quality, False),
+                                    ("Draft preview - quick low-resolution check", self.a_draft, False),
+                                    ("Export settings (shape, size, quality)…", None, False)):
+            b = QPushButton(text)
+            if primary_:
+                b.setProperty("primary", True)
+            b.clicked.connect(act.trigger if act is not None else
+                              (lambda: self.right_tabs.setCurrentIndex(1)))
+            lay.addWidget(b)
+        lay.addWidget(label("Before exporting, the quality check lists anything unfinished - for example an editing "
+                            "plan that was changed but not applied yet.", "Help"))
+        lay.addStretch(1)
+        self._bindings.append(lambda: self.exp_summary.setText(
+            XC.summary(self.project["settings"]) + ("\n" + ("Editing plan: applied." if not
+                                                         self._plan_unapplied() else
+                                                         "Editing plan: changed since it was applied - press "
+                                                         "Apply to Timeline (or the export uses the old timeline).")
+                                                   if self.project["settings"].get("scene_mode") == "timed" and
+                                                   (self.project.get("timed_plan") or "").strip() else "")))
         self.pages.addWidget(pg)
 
         left = QWidget()
@@ -1100,7 +1128,7 @@ class MainWindow(QMainWindow):
         self.bind_path(self.home_script, "script", "Choose script")
         f.addRow("1. Voiceover", self.home_voice)
         f.addRow("2. Images / clips", self.home_media)
-        f.addRow("Script (exact narration, optional)", self.home_script)
+        f.addRow("3. Script (exact narration, optional)", self.home_script)
         self.home_aspect = QComboBox()
         self.bind_combo(self.home_aspect, "aspect", "Aspect ratio", [(v, k) for k, v in XC.ASPECTS.items()],
                         effects=("preview", "export"))
@@ -1113,19 +1141,31 @@ class MainWindow(QMainWindow):
         self.home_cat.activated.connect(self.home_category_chosen)
         self.home_cat_info = label("Sets starting defaults for pacing, motion, captions, look and sound - "
                                    "everything stays editable.", "Help")
-        f.addRow("3. Video category / editing style", self.home_cat)
+        more = QToolButton()
+        more.setCheckable(True)
+        more.setText("More options (category, how images are placed) ▸")
+        f.addRow("", more)
+        f.addRow("Video category / editing style", self.home_cat)
         f.addRow("", self.home_cat_info)
         self.home_mode = QComboBox()
         self.bind_combo(self.home_mode, "scene_mode", "Scene mode", SCENE_MODES, effects=("controls",))
-        f.addRow("4. How images follow the narration", self.home_mode)
-        f.addRow("5. Editing plan", label("Paste or import it in the editor: Instructions tab → Editing plan "
-                                          "(one place for the whole plan).", "Help"))
+        f.addRow("How images follow the narration", self.home_mode)
+
+        def more_rows(on, f=f, more=more):
+            for wdg in (self.home_cat, self.home_cat_info, self.home_mode):
+                f.setRowVisible(wdg, on)
+            more.setText("More options (category, how images are placed) " + ("▾" if on else "▸"))
+        more.toggled.connect(more_rows)
+        more_rows(False)
+        f.addRow("Editing plan", label("Paste or import it in the editor's Editing Plan tab (one place for the "
+                                       "whole plan).", "Help"))
         self._bindings.append(self._load_plan_boxes)
         l1.addLayout(f)
         self.home_analyze = QCheckBox("Analyze the voiceover as soon as the editor opens")
         self.home_analyze.setChecked(True)
         l1.addWidget(self.home_analyze)
-        self.home_go = QPushButton("Open the editor")
+        self.home_go = QPushButton("Create project")
+        self.home_go.setToolTip("Opens the editor with these files (nothing is copied or changed)")
         self.home_go.setProperty("primary", True)
         self.home_go.setMinimumHeight(36)
         self.home_go.clicked.connect(self.home_continue)
@@ -1141,15 +1181,17 @@ class MainWindow(QMainWindow):
         b = QPushButton("Open project…")
         b.clicked.connect(lambda: self.open_project())
         l2.addWidget(b)
-        l2.addWidget(label("Recent", "Section"))
+        self.home_recent_lbl = label("Recent - double-click to open", "Section")
+        l2.addWidget(self.home_recent_lbl)
         self.home_recent = QListWidget()
+        self.home_recent.setMaximumHeight(200)
         self.home_recent.itemActivated.connect(lambda it: self.open_project(it.data(Qt.UserRole)))
-        l2.addWidget(self.home_recent, 1)
-        l2.addWidget(label("Double-click to open.", "Help"))
+        l2.addWidget(self.home_recent)
         self.home_recover = QPushButton("Recover unsaved work…")
         self.home_recover.setToolTip("Open the recovery copy of a project that was never saved")
         self.home_recover.clicked.connect(self.recover_untitled)
         l2.addWidget(self.home_recover)
+        l2.addStretch(1)
         row.addWidget(c1, 3)
         row.addWidget(c2, 2)
         outer.addLayout(row, 1)
@@ -1284,7 +1326,7 @@ class MainWindow(QMainWindow):
     def home_continue(self):
         self.show_editor()
         if self.project["settings"].get("scene_mode") == "timed":
-            self.tools.setCurrentIndex([b.text() for b in self.tools.buttons].index("Instructions"))
+            self.tools.setCurrentIndex([b.text() for b in self.tools.buttons].index("Editing Plan"))
         vo = self.project.get("voiceover")
         if self.home_analyze.isChecked() and vo and os.path.isfile(vo) and not self.project.get("words"):
             self.analyze()
@@ -1303,10 +1345,9 @@ class MainWindow(QMainWindow):
             it.setData(Qt.UserRole, r)
             it.setToolTip(r)
             self.home_recent.addItem(it)
-        if not self.home_recent.count():
-            it = QListWidgetItem("No recent projects yet")
-            it.setFlags(Qt.NoItemFlags)
-            self.home_recent.addItem(it)
+        on = bool(self.home_recent.count())     # hidden when there's nothing to show
+        self.home_recent.setVisible(on)
+        self.home_recent_lbl.setVisible(on)
 
     # ---------------------------------------------------------------- leaving / resetting
     def _confirm_leave(self, what):
@@ -2047,8 +2088,18 @@ class MainWindow(QMainWindow):
                                "A category sets starting defaults for pacing, motion, captions, look and sound.")
         self.motion_help.setText(MOTION_LEVEL_HELP.get(st.get("motion_level", "Medium"), ""))
 
+    def _plan_unapplied(self):
+        from autoedit.timedplan import problems_for_export
+        try:
+            return bool(problems_for_export(self.project))
+        except Exception:
+            return False
+
     def _tool_tab_changed(self, i):
         """The Stock tab needs room for its results grid: widen the left panel a little if it's narrow."""
+        if self.tools.buttons[i].text() == "Export":
+            self.right_tabs.setCurrentIndex(1)
+            self.load_controls()
         if self.pages.widget(i) is not None and self.pages.widget(i).findChild(type(self.stock)) is self.stock:
             sizes = self.split_h.sizes()
             if len(sizes) == 3 and sizes[0] < 420 and sizes[1] > 700:

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "guidelines": ["Use subtle motion", "Cuts only"],
+  "scenes": [
+    {"scene_id": "S001", "image": "001.png", "start": "00:00.000", "end": "00:04.200", "motion": "zoom_in",
+     "transition": "cut", "notes": "opening shot"},
+    {"scene_id": "S002", "image": "002.png", "start": "00:04.200", "end": "00:08.800", "motion": "none",
+     "transition": "crossfade", "sfx": "whoosh.wav"},
+    {"scene_id": "S003", "image": "003.png", "start": "00:08.800", "end": "00:12.000", "motion": "pan right",
+     "transition": "cut", "sfx": "none"}
+  ]
+}

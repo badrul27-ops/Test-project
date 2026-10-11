@@ -197,6 +197,7 @@ COLUMNS = {
     "text": ("text", "overlay", "on-screen text", "label", "title", "caption text"),
     "framing": ("framing", "fit", "crop"),
     "captions": ("captions", "subtitles"),
+    "lock": ("lock", "locked", "locks", "lock visual and timing"),
 }
 _COL = {name: key for key, names in COLUMNS.items() for name in names}
 MD_SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$|^\s*\|\s*:?-+:?\s*\|\s*$")
@@ -232,18 +233,62 @@ def _header(cells):
     return keys
 
 
+NONE_PHRASE = {"motion": "no motion", "transition": "cut to the next scene", "sfx": "no sound effects",
+               "broll": "no b-roll", "effects": "no effects", "captions": "no captions"}
+COL_LOCK = {"lock", "locked", "lock visual and timing", "locks"}
+
+
+def _motion_value(v):
+    """'zoom_in' / 'zoom_in+pan_right' / 'none' / 'static' -> words Editing instructions understands."""
+    t = (v or "").strip()
+    lt = t.lower().rstrip(".")
+    if lt in ("none", "no", "off", "static", "still", "hold", "no motion", "no movement"):
+        return "no motion"
+    if re.fullmatch(r"[a-z_+ ]+", lt) and "_" in lt:
+        return " + ".join(x.strip().replace("_", " ") for x in lt.split("+"))
+    return t
+
+
 def _col_phrase(key, v):
-    """A cell from a named column -> a phrase Editing instructions understands."""
-    v = v.strip()
-    if not v or _mode_word(v) == "none" and key in ("transition", "sfx", "broll", "effects", "text"):
+    """A cell from a named column (or key=value) -> a phrase Editing instructions understands.
+    Empty = follow the guidelines (inherit). 'None' = switched OFF for this scene - never a fallback."""
+    v = (v or "").strip()
+    if not v:
         return ""
+    mw = _mode_word(v)
+    if mw == "none" and key in NONE_PHRASE:
+        return NONE_PHRASE[key]
+    if mw == "none" and key == "text":
+        return ""                              # no text card: nothing to add
+    if mw == "inherit" or mw == "auto" and key != "motion":
+        return ""
+    if key == "motion":
+        return _motion_value(v)
+    if key == "transition":
+        return _phrase(v.replace("_", " "))
     if key == "sfx" and not re.match(r"^(sfx|sound|play)\b", v, re.I):
         return f"sfx {v}"
     if key == "broll" and re.fullmatch(I.FILE_RE, v, re.I):
         return f"show {v} as b-roll"
     if key == "text" and not re.match(r"^text\b", v, re.I):
         return f'text "{v.strip(chr(34))}"'
+    if key == "framing":
+        return {"fill": "fill the frame", "crop": "fill the frame", "fill / crop": "fill the frame",
+                "fit": "show the whole image"}.get(v.lower(), v)
+    if key == "lock":
+        return "lock this scene" if v.lower() in ("yes", "y", "true", "1", "on", "lock", "locked") else ""
     return v
+
+
+def _kv_phrase(x):
+    """'motion=zoom_in' / 'transition: cut' inside a plan line -> (column key, phrase); None if not key=value."""
+    m = re.match(r"^\s*([A-Za-z][\w -]{0,24}?)\s*=\s*(.*)$", x)
+    if not m:
+        return None
+    key = _COL.get(m.group(1).strip().lower()) or ("lock" if m.group(1).strip().lower() in COL_LOCK else None)
+    if not key or key in ("image", "start", "end", "duration", "time", "scene"):
+        return None
+    return key, _col_phrase(key, m.group(2))
 
 
 def _split_motion(extras):
@@ -281,14 +326,109 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
         e["errors"].append(msg)
         problems.append({"line": e["line"], "level": "error", "msg": msg})
 
-    for n, raw in enumerate((text or "").splitlines(), 1):
+    def fill(e, keys, cells, where, extra_notes):
+        """Named cells (table / CSV / JSON) -> the entry. Empty cell = follow the guidelines; None = off."""
+        look = []
+        for k, c in zip(keys, cells):
+            c = _unmd(c) if k != "notes" else c.strip()
+            if not c:
+                continue
+            if k == "scene":
+                dg = re.search(r"\d+", c)
+                e["scene"] = int(dg.group(0)) if dg else None
+                e["scene_id"] = c
+            elif k == "image":
+                e["ref"] = c
+            elif k in ("start", "end"):
+                e[k] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
+                if e[k] is None:
+                    err(e, f"{where}: {k} time “{c}” can't be read - write it like 01:56.84, 1:02:03.5 or 116.84")
+            elif k == "duration":
+                e["duration"] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
+                if e["duration"] is None:
+                    msg = f"{where}: duration “{c}” can't be read - it is only a check, start/end are used"
+                    e["warnings"].append(msg)
+                    problems.append({"line": e["line"], "level": "warning", "msg": msg})
+            elif k == "time":
+                mr = RANGE.match(c)
+                if mr:
+                    e["start"], e["end"] = parse_time(mr.group(1)), parse_time(mr.group(2))
+                else:
+                    err(e, f"{where}: time “{c}” isn't a range - write it like 01:56.84 - 02:06.76")
+            elif k == "motion":
+                e["motion"] = _col_phrase("motion", c)
+            elif k == "notes":
+                extra_notes.append(c)
+            elif k:
+                ph = _col_phrase(k, c)
+                if ph:
+                    look.append(ph)
+            else:
+                extra_notes.append(c)
+        for c in cells[len(keys):]:
+            if c:
+                extra_notes.append(c)
+        e["look"] = ", ".join(look)
+
+    def blank(n, fmt=""):
+        return {"line": n, "scene": None, "start": None, "end": None, "duration": None, "ref": "", "media": None,
+                "motion": "", "look": "", "notes": "", "errors": [], "warnings": [], "fmt": fmt}
+
+    guide_lines, guide_mode, is_json = [], False, False
+    stripped = (text or "").strip()
+    if stripped[:1] in ("{", "["):                 # versioned JSON: {"version": 1, "guidelines": [...], "scenes": [...]}
+        import json
+        is_json = True
+        try:
+            data = json.loads(stripped)
+        except ValueError as ex:
+            problems.append({"line": getattr(ex, "lineno", 0) or 0, "level": "error",
+                             "msg": f"the JSON plan can't be read: {getattr(ex, 'msg', ex)} (line "
+                                    f"{getattr(ex, 'lineno', '?')}, column {getattr(ex, 'colno', '?')})"})
+            return [], [], problems
+        if isinstance(data, list):
+            data = {"scenes": data}
+        if not isinstance(data, dict) or not isinstance(data.get("scenes"), list):
+            problems.append({"line": 0, "level": "error", "msg": 'a JSON plan needs a list of scenes, e.g. {"version": '
+                             '1, "scenes": [{"image": "001.png", "start": "00:00.000", "end": "00:04.200"}]}'})
+            return [], [], problems
+        try:
+            ver = int(data.get("version", 1) or 1)
+        except (TypeError, ValueError):
+            ver = 0
+        if ver != 1:
+            problems.append({"line": 0, "level": "warning", "msg": f"JSON plan version {data.get('version')} - this "
+                             "AutoEditor reads version 1; fields it doesn't know are listed"})
+        g = data.get("guidelines") or []
+        guide_lines = [(0, x) for x in ([g] if isinstance(g, str) else g) if isinstance(x, str)]
+        unknown = []
+        for i, sc in enumerate(data["scenes"], 1):
+            e = blank(0, "json")
+            e["label"] = f"scene #{i}"
+            entries.append(e)
+            if not isinstance(sc, dict):
+                err(e, f"scene #{i}: must be an object with image, start and end")
+                continue
+            ks = list(sc.keys())
+            keys = [_COL.get(str(k).strip().lower()) or _COL.get(str(k).strip().lower().replace("_", " ")) for k in ks]
+            unknown += [str(k) for k, kk in zip(ks, keys) if not kk and str(k) not in unknown]
+            ex_notes = []
+            fill(e, keys, ["" if sc[k] is None else str(sc[k]) for k in ks], f"scene #{i}", ex_notes)
+            e["notes"] = " · ".join(ex_notes)
+        if unknown:
+            problems.append({"line": 0, "level": "warning", "msg": f"JSON field(s) {', '.join(unknown)} not understood "
+                             "- their values are kept as notes, NOT applied"})
+
+    for n, raw in enumerate((text or "").splitlines() if not is_json else [], 1):
+        if GUIDE_HEAD.match(raw) or TITLE_LINE.match(raw):
+            guide_mode = True                  # full-video guidelines follow (until the first scene)
+            continue
         line = _strip_comment(raw).strip()
         if not line or line.startswith("//"):
             continue
         if MD_SEP.match(line) or re.fullmatch(r"[-=*_ ]{3,}", line):    # table separator / horizontal rule
             continue
-        e = {"line": n, "scene": None, "start": None, "end": None, "duration": None, "ref": "", "media": None,
-             "motion": "", "look": "", "notes": "", "errors": [], "warnings": [], "fmt": ""}
+        e = blank(n)
         m = RANGE.match(line)
         if m and not line.startswith("|"):                      # compact: 0:04 - 0:09 | 002.png | look
             e["fmt"] = "lines"
@@ -302,7 +442,19 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
                               r"|\d+|\?+)\s*,?\s*(.*)$", rest, re.I)
                 ref, extras = (mm.group(1), mm.group(2)) if mm else ("", rest)
             e["ref"] = ref
-            e["motion"], e["look"] = _split_motion(extras)
+            plain, mo, look, nts = [], [], [], []
+            for x in _split_extras(extras):
+                kv = _kv_phrase(x)
+                if kv is None:
+                    plain.append(x)
+                elif kv[0] == "notes":
+                    nts.append(x.split("=", 1)[1].strip())
+                elif kv[1]:
+                    (mo if kv[0] == "motion" else look).append(kv[1])
+            m2, l2 = _split_motion(", ".join(plain))
+            e["motion"] = ", ".join(x for x in mo + [m2] if x)
+            e["look"] = ", ".join(x for x in look + [l2] if x)
+            e["notes"] = " · ".join(nts)
             entries.append(e)
             continue
         cells = None
@@ -322,45 +474,17 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
             h = _header(cells)
             if h:
                 csv_header, header = h, None
+                bad = [c for c, k in zip(cells, h) if not k and c]
+                if bad:
+                    problems.append({"line": n, "level": "warning", "msg": f"line {n}: column(s) "
+                                     f"{', '.join(bad)} not understood - their cells are kept as notes"})
                 continue
             e["fmt"] = "csv"
         if cells is not None:
             keys = header if e["fmt"] == "table" else csv_header
             extra_notes = []
             if keys:
-                look = []
-                for k, c in zip(keys, cells):
-                    c = _unmd(c) if k != "notes" else c.strip()
-                    if not c:
-                        continue
-                    if k == "scene":
-                        e["scene"] = int(c) if c.isdigit() else None
-                    elif k == "image":
-                        e["ref"] = c
-                    elif k in ("start", "end"):
-                        e[k] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
-                        if e[k] is None:
-                            err(e, f"line {n}: {k} time “{c}” can't be read (use 01:56.84 or 116.84)")
-                    elif k == "duration":
-                        e["duration"] = parse_time(re.sub(r"\s*(s|sec|secs|seconds?)\s*$", "", c, flags=re.I))
-                    elif k == "time":
-                        mr = RANGE.match(c)
-                        if mr:
-                            e["start"], e["end"] = parse_time(mr.group(1)), parse_time(mr.group(2))
-                    elif k == "motion":
-                        e["motion"] = c
-                    elif k == "notes":
-                        extra_notes.append(c)
-                    elif k:
-                        ph = _col_phrase(k, c)
-                        if ph:
-                            look.append(ph)
-                    else:
-                        extra_notes.append(c)
-                for c in cells[len(keys):]:
-                    if c:
-                        extra_notes.append(c)
-                e["look"] = ", ".join(look)
+                fill(e, keys, cells, f"line {n}", extra_notes)
             else:                                   # table row with no header: find the image and the times
                 plain = [_unmd(c) for c in cells]
                 im = next((i for i, c in enumerate(plain) if re.fullmatch(I.FILE_RE, c, re.I)), None)
@@ -392,13 +516,15 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
         mn = NOTE_FILE.match(plain) or NOTE_SCENE.match(plain)
         if mn:
             notes.append((n, mn.groupdict().get("ref"), mn.groupdict().get("num"), mn.group("note").strip()))
+        elif guide_mode and not entries and header is None and csv_header is None:
+            guide_lines.append((n, line))
         else:
             prose.append((n, line))
     # ---- check each entry; times: start/end are authoritative, a given duration is only checked
     seen_scene = {}
     for e in entries:
         n = e["line"]
-        lab = f"line {n}" + (f" (scene {e['scene']})" if e["scene"] is not None else "")
+        lab = e.get("label") or (f"line {n}" + (f" (scene {e['scene']})" if e["scene"] is not None else ""))
         e["label"] = lab
         if e["start"] is None or e["end"] is None:
             if not e["errors"]:
@@ -434,7 +560,7 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
         if e["errors"] or not e["media"]:
             continue
         e["extras"] = ", ".join(x for x in (e["motion"], e["look"]) if x)
-        rows.append({"line": e["line"], "scene": e["scene"], "start": I.snap(e["start"], fps),
+        rows.append({"line": e["line"], "label": e["label"], "scene": e["scene"], "start": I.snap(e["start"], fps),
                      "end": I.snap(e["end"], fps), "start_raw": e["start"], "end_raw": e["end"], "ref": e["ref"],
                      "media": e["media"], "extras": e["extras"], "notes": e["notes"], "entry": e})
     # ---- notes lines -> their scenes (by image file or scene number)
@@ -473,6 +599,9 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
     for n, line in prose:
         problems.append({"line": n, "level": "warning",
                          "msg": f"line {n}: not a scene row or a note - NOT used: “{_unmd(line)[:70]}”"})
+    fmt, guide = _guidelines(guide_lines, problems) if guide_lines else ({}, {})
+    for r in rows:
+        r["project"], r["guide"] = fmt, guide
     _coverage(rows, duration, problems)
     # look phrases: every phrase must be understood (listed otherwise, never silently ignored)
     for r in rows:
@@ -484,11 +613,11 @@ def parse_entries(text, media, duration=None, fps=30, words=None):
         _, interp, unresolved, _ = I.parse(r["text"])
         r["interp"] = r["entry"]["interp"] = interp
         for u in unresolved:
-            msg = f"line {r['line']}: “{u}” not understood - NOT applied"
+            msg = f"{r['label']}: “{u}” not understood - NOT applied"
             r["entry"]["warnings"].append(msg)
             problems.append({"line": r["line"], "level": "warning", "msg": msg})
         if any(m_.startswith("visual ") for _, m_ in interp):
-            msg = f"line {r['line']}: put one image per scene (extra images on a line are ignored)"
+            msg = f"{r['label']}: put one image per scene (extra images on a line are ignored)"
             r["entry"]["warnings"].append(msg)
             problems.append({"line": r["line"], "level": "warning", "msg": msg})
     if not entries and not any(p["level"] == "error" for p in problems):
@@ -701,9 +830,16 @@ def build(project, log=print):
                        "text": scene_text(words, r["start"], r["end"]), "zoom": 1.0, "x": 0.0, "y": 0.0, "rot": 0.0,
                        "motion": "none" if is_video(r["media"]) else "zoom_in", "transition": "cut",
                        "status": "assigned", "why": f"timed plan {_lab(r)}", "plan_line": r["line"]})
-    apply_motion_level(scenes, preset, st.get("motion_level", "Medium"), seed=int(st.get("seed", 7)))
+    guide = rows[0].get("guide") or {}            # full-video guidelines written in the plan itself
+    apply_motion_level(scenes, preset, guide.get("motion_level", st.get("motion_level", "Medium")),
+                       seed=int(st.get("seed", 7)))
     reassign_transitions(scenes, preset, words, seed=int(st.get("seed", 7)))
     apply_guidelines(project, scenes)
+    for s_ in scenes:                          # explicit per-scene settings are applied after this and win
+        if guide.get("transition"):
+            s_["transition"] = guide["transition"]
+        if guide.get("fit"):
+            s_["fit"] = guide["fit"]
     scenes[-1]["transition"] = "cut"
     project["scenes"] = scenes
     project["broll"] = [b for b in project.get("broll") or [] if not str(b.get("source", "")).startswith("T")]
@@ -730,7 +866,8 @@ def build(project, log=print):
                                                  if r.get("settings") is not None else
                                                  f"{_f(r['start'])} - {_f(r['end'])} | {r['ref']} | {r['extras']}"),
                    interpretation=[[c, m] for c, m in interp], unresolved=unresolved, from_plan=True,
-                   choices={"primary_visual": 0})
+                   choices={"primary_visual": 0},
+                   plan_times=[r.get("start_raw", r["start"]), r.get("end_raw", r["end"])])
         if notes:
             rec["notes"] = "\n".join(notes)
         ok, msg = I.apply(project, sid, log, ctx, reviewed=True, placed=True)
@@ -748,7 +885,10 @@ def build(project, log=print):
            f"({_f(0)}-{_f(dur)})" + ("; anything not specified is None." if sheet else
                                     f"; {n_look} with their own look, the rest follow the project guidelines.")]
     if fmt_changes:
-        rep.append("Export format from GENERAL RULES: " + "; ".join(fmt_changes))
+        rep.append("Export format from the plan's guidelines: " + "; ".join(fmt_changes))
+    if guide:
+        rep.append("Guidelines from the plan (scenes without their own setting): " +
+                   ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in guide.items()))
     rep += [p["msg"] for p in problems if p["level"] == "warning"]
     rep += failed
     if unused:
@@ -854,7 +994,7 @@ def parse_sheet(text, media, duration=None, fps=30, words=None):
         elif raw.strip() and cur["fields"]:               # continuation of the previous value
             ln, k, v = cur["fields"][-1]
             cur["fields"][-1] = (ln, k, (v + " " + raw.strip()).strip())
-    project = _general_rules(general, problems)
+    project, guide = _guidelines(general, problems)
     seen = set()
     for b in blocks:
         lab = f"SCENE {b['num']:03d}"
@@ -920,7 +1060,7 @@ def parse_sheet(text, media, duration=None, fps=30, words=None):
     if not rows and not any(p["level"] == "error" for p in problems):
         problems.append({"line": 0, "level": "error", "msg": "The scene sheet has no scenes."})
     for r in rows:
-        r["project"] = project
+        r["project"], r["guide"] = project, guide
     return rows, problems
 
 
@@ -948,6 +1088,49 @@ def _general_rules(lines, problems):
     if re.search(r"\bfill the canvas\b|\bfill\s*/\s*crop\b", txt, re.I):
         out["fit"] = "crop"
     return out
+
+
+GUIDE_HEAD = re.compile(r"^\s*(?:#+\s*)?\**\s*(project guidelines|guidelines|general rules|project rules|"
+                        r"rules for the whole video)\s*\**\s*:?\s*$", re.I)
+TITLE_LINE = re.compile(r"^\s*(?:#+\s*)?\**\s*strict visual editing instructions\s*\**\s*$", re.I)
+
+
+def _guidelines(lines, problems):
+    """Full-video guidelines -> (export format, overrides for the strict build). Every sentence is used,
+    acknowledged, or listed as NOT applied - never silently dropped."""
+    from .planner import parse_project_instructions
+    fmt = _general_rules(lines, problems)
+    ov = {}
+    for n, raw in lines:
+        t = _unmd(raw)
+        if not t or GUIDE_HEAD.match(raw) or TITLE_LINE.match(raw):
+            continue
+        for sent in [x.strip() for x in re.split(r"(?<=[.;!])\s+", t) if x.strip()]:
+            low = sent.lower()
+            if re.search(r"\b(16:9|9:16|1:1|\d+\s*fps|landscape|portrait|vertical|horizontal|square|one video|"
+                         r"export)\b|\d{3,4}\s*[x×]\s*\d{3,4}", low):
+                if "aspect" not in fmt:
+                    for pat, asp in ((r"\b(landscape|horizontal)\b", "16:9"), (r"\b(portrait|vertical)\b", "9:16"),
+                                     (r"\bsquare\b", "1:1")):
+                        if re.search(pat, low):
+                            fmt["aspect"] = asp
+                continue                       # export format: handled above
+            if re.search(r"\b(narration|voice ?over|speech|audio)\b", low) and \
+                    re.search(r"\b(unchanged|never|don'?t|do not|keep|as (it )?is)\b", low):
+                continue                       # always true: the narration is never changed
+            o, res = parse_project_instructions(sent)
+            if not (res and res[0][1]):
+                problems.append({"line": n, "level": "warning",
+                                 "msg": f"line {n}: guideline “{sent[:70]}” not understood - NOT applied"})
+                continue
+            for k, v in o.items():
+                if k in ("motion_level", "transition", "fit"):
+                    ov[k] = v
+                else:
+                    problems.append({"line": n, "level": "warning",
+                                     "msg": f"line {n}: guideline “{sent[:70]}” doesn't apply to a strict plan (your "
+                                            "plan sets the pictures, order and times) - NOT applied"})
+    return fmt, ov
 
 
 def _sheet_settings(lab, f, a, e, problems):
@@ -1331,3 +1514,104 @@ def export_sheet(project):
             out.append("Notes: " + " / ".join(extra))
         out.append("")
     return "\n".join(out)
+
+
+# ============================================================================ diagnostics
+TIMELINE_KEYS = ("scenes", "broll", "sfx_events", "overlays", "words", "duration", "voiceover", "music", "settings")
+
+
+def timeline_revision(project):
+    """Short content hash of everything an export draws - logged with each export, so a video can be traced
+    back to the exact timeline it was made from."""
+    import hashlib
+    import json
+    blob = json.dumps({k: project.get(k) for k in TIMELINE_KEYS}, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def diagnostic_plan(project):
+    """One row per timeline scene: ID, asset/path, the times the plan asked for, the frame-snapped times on the
+    timeline, and the settings in force (with where each came from)."""
+    recs = I.records(project)
+    out = []
+    for k, sc in enumerate(project.get("scenes") or [], 1):
+        rec = recs.get(sc.get("id")) or {}
+        req = rec.get("plan_times") or [None, None]
+        sid = sc.get("id")
+        out.append({
+            "n": k, "scene_id": sid, "plan_line": sc.get("plan_line"), "asset": os.path.basename(sc.get("media") or ""),
+            "path": sc.get("media") or "", "requested_start": req[0], "requested_end": req[1],
+            "start": round(sc["start"], 6), "end": round(sc["end"], 6), "duration": round(sc["end"] - sc["start"], 6),
+            "motion": sc.get("motion"), "motion_amount": sc.get("motion_amount"), "transition_out": sc.get("transition"),
+            "transition_s": sc.get("transition_s"), "fit": sc.get("fit") or project["settings"].get("fit"),
+            "focus": sc.get("focus"), "effects": sc.get("effects") or [], "captions": sc.get("captions", "inherit"),
+            "broll": [{k_: b.get(k_) for k_ in ("media", "start", "end", "mode", "clip_in", "clip_out", "audio_gain_db")}
+                      for b in project.get("broll") or [] if b.get("source") == sid],
+            "sfx": [{k_: e.get(k_) for k_ in ("file", "t", "rel_db", "fade_in", "fade_out")}
+                    for e in project.get("sfx_events") or [] if e.get("source") == sid],
+            "locked": bool(sc.get("locked")), "locked_fields": sc.get("locked_fields") or [],
+            "status": sc.get("status"), "why": sc.get("why"), "provenance": sc.get("provenance") or {},
+            "notes": rec.get("notes") or "", "warnings": sc.get("warnings") or []})
+    return {"autoeditor_diagnostic_plan": 1, "timeline_revision": timeline_revision(project),
+            "duration": project.get("duration"), "fps": project["settings"].get("fps"),
+            "aspect": project["settings"].get("aspect"), "resolution": project["settings"].get("resolution"),
+            "scene_mode": project["settings"].get("scene_mode"), "scenes": out}
+
+
+def save_diagnostic_plan(project, path):
+    """Write the diagnostic plan as JSON (and a CSV next to it for a spreadsheet)."""
+    import csv
+    import json
+    d = diagnostic_plan(project)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2, default=str)
+    cols = ("n", "scene_id", "asset", "requested_start", "requested_end", "start", "end", "duration", "motion",
+            "transition_out", "fit", "status", "notes", "path")
+    with open(os.path.splitext(path)[0] + ".csv", "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for r in d["scenes"]:
+            w.writerow([r.get(c) for c in cols])
+    return d
+
+
+# ============================================================================ templates (More → Save a plan template)
+TEMPLATES = {
+    ".md": """# My editing plan
+
+PROJECT GUIDELINES
+- Use subtle motion
+- Cuts only
+
+| Scene | Image   | Start     | End       | Duration | Motion       | Transition | Notes                 |
+|-------|---------|-----------|-----------|----------|--------------|------------|-----------------------|
+| 1     | 001.png | 00:00.000 | 00:04.200 | 4.200    | slow zoom in | cut        | opening shot          |
+| 2     | 002.png | 00:04.200 | 00:08.800 | 4.600    | none         | crossfade  |                       |
+| 3     | 003.png | 00:08.800 | 00:12.000 | 3.200    | pan right    | cut        |                       |
+
+- **002.png:** notes like this are kept with the scene that uses 002.png (not applied as edits)
+""",
+    ".csv": """scene_id,image,start,end,motion,transition,sfx,notes
+S001,001.png,00:00.000,00:04.200,zoom_in,cut,,opening shot
+S002,002.png,00:04.200,00:08.800,none,crossfade,whoosh.wav,
+S003,003.png,00:08.800,00:12.000,pan right,cut,none,
+""",
+    ".json": """{
+  "version": 1,
+  "guidelines": ["Use subtle motion", "Cuts only"],
+  "scenes": [
+    {"scene_id": "S001", "image": "001.png", "start": "00:00.000", "end": "00:04.200", "motion": "zoom_in",
+     "transition": "cut", "notes": "opening shot"},
+    {"scene_id": "S002", "image": "002.png", "start": "00:04.200", "end": "00:08.800", "motion": "none",
+     "transition": "crossfade", "sfx": "whoosh.wav"},
+    {"scene_id": "S003", "image": "003.png", "start": "00:08.800", "end": "00:12.000", "motion": "pan right",
+     "transition": "cut", "sfx": "none"}
+  ]
+}
+""",
+    ".txt": """# One line per scene:  start - end | image | how it looks (optional)
+00:00.000 - 00:04.200 | 001.png | motion=zoom_in | transition=cut
+00:04.200 - 00:08.800 | 002.png | motion=none | transition=crossfade
+00:08.800 - 00:12.000 | 003.png | pan right, cut
+""",
+}

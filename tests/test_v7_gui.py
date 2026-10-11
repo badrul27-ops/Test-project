@@ -70,7 +70,9 @@ def main():
 
     # ---------------- Script tab
     names = [b.text() for b in w.tools.buttons]
-    assert names[:3] == ["Media", "Script", "Instructions"], names
+    assert names[:3] == ["Media", "Script", "Editing Plan"], names
+    shown = [b.text() for b in w.tools.buttons if b.isVisibleTo(w.tools)]
+    assert shown == ["Media", "Editing Plan", "Export"], shown          # the rest sit behind 'More' 
     w.tools.buttons[1].click()
     app.processEvents()
     w.script_panel.edit.setPlainText(SCRIPT)

@@ -1,4 +1,4 @@
-# AutoEditor v7.4
+# AutoEditor v7.5
 
 Automatic video editor for Windows. Everything runs on your own PC, and there's no subscription or API cost.
 
@@ -20,6 +20,44 @@ The first time you press *Analyze*, the speech model downloads once. The "small"
 ## Upgrading from an older version
 
 Unzip v6 **over** your existing AutoEditor folder and replace the files when Windows asks. Keep the `venv` folder, so you don't need to run setup again. Then start it with `run.bat` as before.
+
+## New in v7.5: simpler workflow, exact cuts, every plan format
+
+**Workflow.** The editor has three main tabs: **Media**, **Editing Plan**, **Export**. Script, Audio, Text,
+Effects, Transitions, Captions and Stock are under **More ▸**. The start screen asks only for the voiceover,
+images/clips, optional script and video shape; category and plan mode are under *More options*. The button is
+**Create project**. The Recent list only shows when there is something in it. Scene modes are called **Strict
+plan** (your exact images and times) and **Assisted plan** (matches images by their descriptions - review it).
+
+**Cuts land on the exact frame.** Some cuts used to appear **one frame late** in both the preview and the video
+(when the cut time was rounded up to a whole frame). Fixed and checked on the last frame before and the first
+frame after each cut, in the preview and in the exported video.
+
+**More plan formats** (all become the same scene list):
+- lines with settings: `00:00.000 - 00:04.200 | 001.png | motion=zoom_in | transition=cut`
+- CSV such as `scene_id,image,start,end,motion,transition` with values like `zoom_in`, `none`, `cut`, and IDs like
+  `S001`
+- JSON: `{"version": 1, "guidelines": [...], "scenes": [{"image": "001.png", "start": "00:00.000", "end": ...}]}`
+- a **PROJECT GUIDELINES** section at the top of any plan (e.g. "Use subtle motion", "Cuts only"). Guidelines
+  are applied to scenes that don't set that thing themselves; anything not understood is listed as NOT applied.
+- Times can be `116.84`, `01:56.84` or `00:01:56.84` - they all mean the same.
+
+**None means off.** Writing `none` for motion, transition, sound effects, B-roll or effects switches that thing
+OFF for the scene. An empty cell means "follow the guidelines".
+
+**Review table:** Image (with a thumbnail) | Script excerpt (what is said during the scene) | Start | End |
+Duration | Motion | Status. Notes, sound effects, B-roll, effects and transitions are in **Scene details** below
+the table (notes are editable there).
+
+**Templates and diagnostics.** *More → Save a plan template* writes a ready-to-fill Markdown, CSV, JSON or plain
+template (also in the `examples` folder). *More → Save diagnostic plan* writes every scene's image, path, the
+times you asked for, the exact frame times used, and its settings (JSON + CSV). Every export also records its
+**timeline revision** in the log and saves `last_export_plan.json` in the `_autoedit_work` folder - so you can
+check what a video was made from.
+
+**Measured speed** (fixed 60 s sample, 1080p, Standard, 4-core PC): 43.0 s before → 44.1 s after - the same within
+measuring noise, and the same picture (average difference 0.16 of 255 grey levels). Building the frames is ~75 %
+of the render time; that is the part to speed up next.
 
 ## New in v7.4: one Editing plan
 

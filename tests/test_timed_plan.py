@@ -170,7 +170,7 @@ def main():
     if os.environ.get("AE_SHOTS"):
         w.plan_win.grab().save(os.path.join(os.environ["AE_SHOTS"], "timed_plan_big.png"))
         os.makedirs(os.environ["AE_SHOTS"], exist_ok=True)
-        w.tools.setCurrentIndex([b.text() for b in w.tools.buttons].index("Instructions"))
+        w.tools.setCurrentIndex([b.text() for b in w.tools.buttons].index("Editing Plan"))
         app.processEvents()
         w.grab().save(os.path.join(os.environ["AE_SHOTS"], "timed_plan.png"))
     print(f"  window: 'Fill template' → {n} lines with ???; Build refused until every image is chosen; then built "
